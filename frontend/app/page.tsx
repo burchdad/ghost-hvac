@@ -17,10 +17,18 @@ type SimulationResponse = {
     timestamp: string;
     pressure: number;
     runtime: number;
+    superheat: number;
+    subcooling: number;
+    delta_t: number;
+    ambient_temp: number;
   };
   analysis: {
     alerts: string[];
     severity: Severity;
+    health_score: number;
+    leak_probability: number;
+    leak_label: "LOW" | "MEDIUM" | "HIGH";
+    ai_explanation: string;
   };
 };
 
@@ -76,6 +84,11 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [healthScore, setHealthScore] = useState<number>(100);
+  const [leakProbability, setLeakProbability] = useState<number>(0);
+  const [leakLabel, setLeakLabel] = useState<"LOW" | "MEDIUM" | "HIGH">("LOW");
+  const [aiExplanation, setAiExplanation] = useState<string>("");
+  const [latestData, setLatestData] = useState<{ pressure: number; runtime: number; superheat: number; subcooling: number; delta_t: number; ambient_temp: number } | null>(null);
   const [alertPhone, setAlertPhone] = useState("");
   const [alertEmail, setAlertEmail] = useState("");
   const [subscribeStatus, setSubscribeStatus] = useState<string | null>(null);
@@ -111,6 +124,7 @@ export default function Home() {
             time: displayTime,
             pressure: payload.data.pressure,
             runtime: payload.data.runtime,
+            superheat: payload.data.superheat,
           },
         ];
         return next.slice(-MAX_HISTORY_POINTS);
@@ -119,6 +133,18 @@ export default function Home() {
       setSeverity(payload.analysis.severity);
       setCurrentAlerts(payload.analysis.alerts);
       setLastUpdated(displayTime);
+      setHealthScore(payload.analysis.health_score);
+      setLeakProbability(payload.analysis.leak_probability);
+      setLeakLabel(payload.analysis.leak_label);
+      setAiExplanation(payload.analysis.ai_explanation);
+      setLatestData({
+        pressure: payload.data.pressure,
+        runtime: payload.data.runtime,
+        superheat: payload.data.superheat,
+        subcooling: payload.data.subcooling,
+        delta_t: payload.data.delta_t,
+        ambient_temp: payload.data.ambient_temp,
+      });
 
       if (payload.analysis.alerts.length > 0) {
         setAlertLog((previous) => {
@@ -186,6 +212,11 @@ export default function Home() {
         setCurrentAlerts([]);
         setAlertLog([]);
         setSeverity("NORMAL");
+        setHealthScore(100);
+        setLeakProbability(0);
+        setLeakLabel("LOW");
+        setAiExplanation("");
+        setLatestData(null);
         setLastUpdated(null);
         await fetchSimulation(false);
       } catch (error) {
@@ -228,6 +259,16 @@ export default function Home() {
     [leakMode]
   );
 
+  const healthColor =
+    healthScore >= 70 ? "text-emerald-400" : healthScore >= 40 ? "text-amber-400" : "text-rose-400";
+
+  const leakBadgeStyle =
+    leakLabel === "HIGH"
+      ? "bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/50"
+      : leakLabel === "MEDIUM"
+        ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40"
+        : "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40";
+
   return (
     <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-10 sm:px-8 lg:px-12">
       <div className="ghost-orb ghost-orb-left" aria-hidden="true" />
@@ -249,59 +290,120 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-          <StatusCard
-            severity={severity}
-            alerts={currentAlerts}
-            lastUpdated={lastUpdated}
-          />
-          <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
-            <h2 className="font-heading text-xl tracking-wide text-slate-100">
-              Controls
-            </h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Polling every 2.5 seconds. Trigger leak mode to stress the system.
+        {/* ── EXECUTIVE ROW ─────────────────────────────────────────────── */}
+        <div className="grid gap-4 sm:grid-cols-3">
+          {/* System Status */}
+          <StatusCard severity={severity} alerts={currentAlerts} lastUpdated={lastUpdated} />
+
+          {/* Health Score */}
+          <section className="flex flex-col items-center justify-center rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              System Health
             </p>
-
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button
-                type="button"
-                className="rounded-xl border border-rose-400/45 bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/30"
-                onClick={handleLeak}
-              >
-                Simulate Leak
-              </button>
-              <button
-                type="button"
-                className="rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
-                onClick={handleReset}
-              >
-                Reset
-              </button>
+            <p className={`font-heading text-6xl font-bold tabular-nums ${healthColor}`}>
+              {healthScore}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">out of 100</p>
+            <div className="mt-3 h-2 w-full rounded-full bg-slate-800">
+              <div
+                className={`h-2 rounded-full transition-all duration-700 ${
+                  healthScore >= 70 ? "bg-emerald-500" : healthScore >= 40 ? "bg-amber-500" : "bg-rose-500"
+                }`}
+                style={{ width: `${healthScore}%` }}
+              />
             </div>
+          </section>
 
-            <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">
-              {isLoading ? "Fetching telemetry..." : "Realtime feed active"}
-              {errorMessage ? (
-                <p className="mt-2 text-rose-300">Error: {errorMessage}</p>
-              ) : null}
-            </div>
+          {/* Leak Probability */}
+          <section className="flex flex-col items-center justify-center rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-slate-500">
+              Leak Probability
+            </p>
+            <p className="font-heading text-6xl font-bold tabular-nums text-slate-100">
+              {leakProbability}%
+            </p>
+            <span className={`mt-3 rounded-full px-4 py-1 text-sm font-semibold ${leakBadgeStyle}`}>
+              {leakLabel}
+            </span>
           </section>
         </div>
 
+        {/* ── TECHNICAL ROW ─────────────────────────────────────────────── */}
+        <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
+          {(
+            [
+              { label: "Pressure", value: latestData?.pressure ?? "—", unit: "PSI", color: "text-cyan-400" },
+              { label: "Runtime",  value: latestData?.runtime  ?? "—", unit: "min", color: "text-amber-400" },
+              { label: "Superheat", value: latestData?.superheat ?? "—", unit: "°F", color: "text-violet-400" },
+              { label: "Delta-T",  value: latestData?.delta_t  ?? "—", unit: "°F", color: "text-sky-400" },
+            ] as const
+          ).map(({ label, value, unit, color }) => (
+            <section
+              key={label}
+              className="rounded-2xl border border-slate-700 bg-slate-950/70 p-5 backdrop-blur"
+            >
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">{label}</p>
+              <p className={`font-heading mt-1 text-3xl font-bold tabular-nums ${color}`}>
+                {typeof value === "number" ? value.toFixed(1) : value}
+              </p>
+              <p className="text-xs text-slate-600">{unit}</p>
+            </section>
+          ))}
+        </div>
+
+        {/* ── CHART ─────────────────────────────────────────────────────── */}
         <Chart data={history} />
 
-        <section className="rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-6 shadow-[0_0_60px_-20px_rgba(6,182,212,0.25)] backdrop-blur">
-          <h2 className="font-heading text-xl tracking-wide text-cyan-300">
-            Get Alerts
-          </h2>
+        {/* ── AI EXPLANATION ────────────────────────────────────────────── */}
+        {aiExplanation && (
+          <section className="rounded-2xl border border-violet-500/25 bg-slate-950/80 p-6 backdrop-blur">
+            <h2 className="font-heading text-xl tracking-wide text-violet-300">
+              AI Explanation
+            </h2>
+            <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-300">
+              {aiExplanation}
+            </p>
+          </section>
+        )}
+
+        {/* ── CONTROLS ──────────────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
+          <h2 className="font-heading text-xl tracking-wide text-slate-100">Controls</h2>
           <p className="mt-1 text-sm text-slate-400">
-            Enter your phone or email and we&apos;ll blast you an alert the moment we detect a problem.
+            Polling every 2.5 s. Trigger leak mode to stress the thermodynamic model.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <button
+              type="button"
+              className="rounded-xl border border-rose-400/45 bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/30"
+              onClick={handleLeak}
+            >
+              Simulate Leak
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30"
+              onClick={handleReset}
+            >
+              Reset
+            </button>
+          </div>
+          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3 text-sm text-slate-300">
+            {isLoading ? "Fetching telemetry…" : "Realtime feed active"}
+            {errorMessage ? <p className="mt-2 text-rose-300">Error: {errorMessage}</p> : null}
+          </div>
+        </section>
+
+        {/* ── GET ALERTS ────────────────────────────────────────────────── */}
+        <section className="rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-6 shadow-[0_0_60px_-20px_rgba(6,182,212,0.25)] backdrop-blur">
+          <h2 className="font-heading text-xl tracking-wide text-cyan-300">Get Alerts</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Enter your phone or email and we&apos;ll text you the moment we detect a problem.
           </p>
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <input
               type="tel"
-              placeholder="Phone number (e.g. +15550001234)"
+              placeholder="Phone (e.g. +15550001234)"
               value={alertPhone}
               onChange={(e) => setAlertPhone(e.target.value)}
               className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-cyan-500"
@@ -322,15 +424,12 @@ export default function Home() {
               {isSubscribing ? "Subscribing…" : "Notify Me"}
             </button>
           </div>
-          {subscribeStatus ? (
-            <p className="mt-3 text-sm text-cyan-300">{subscribeStatus}</p>
-          ) : null}
+          {subscribeStatus ? <p className="mt-3 text-sm text-cyan-300">{subscribeStatus}</p> : null}
         </section>
 
+        {/* ── ALERT LOG ─────────────────────────────────────────────────── */}
         <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
-          <h2 className="font-heading text-xl tracking-wide text-slate-100">
-            Recent Alert Log
-          </h2>
+          <h2 className="font-heading text-xl tracking-wide text-slate-100">Recent Alert Log</h2>
           {alertLog.length === 0 ? (
             <p className="mt-3 text-sm text-slate-500">No alerts captured yet.</p>
           ) : (

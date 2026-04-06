@@ -15,6 +15,7 @@ export type HistoryPoint = {
   time: string;
   pressure: number;
   runtime: number;
+  superheat: number;
 };
 
 type ChartProps = {
@@ -57,6 +58,14 @@ export default function Chart({ data }: ChartProps) {
               strokeWidth={2.4}
               dot={false}
               name="Runtime"
+            />
+            <Line
+              type="monotone"
+              dataKey="superheat"
+              stroke="#a78bfa"
+              strokeWidth={2.4}
+              dot={false}
+              name="Superheat °F"
             />
           </LineChart>
         </ResponsiveContainer>

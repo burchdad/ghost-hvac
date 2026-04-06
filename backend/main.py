@@ -66,6 +66,10 @@ def simulate(leak: bool = Query(False)) -> dict:
         prev_pressure=_previous_pressure,
         runtime=float(data["runtime"]),
         baseline_runtime=BASELINE_RUNTIME,
+        superheat=float(data["superheat"]),
+        subcooling=float(data["subcooling"]),
+        delta_t=float(data["delta_t"]),
+        ambient_temp=float(data["ambient_temp"]),
     )
 
     _previous_pressure = float(data["pressure"])
