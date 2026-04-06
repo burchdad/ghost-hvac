@@ -62,7 +62,7 @@ This repository is a monorepo, so Railway may not auto-detect the backend withou
 Included config:
 
 - [railway.toml](railway.toml) uses Nixpacks
-- Build command installs [backend/requirements.txt](backend/requirements.txt)
+- Build command installs Python + pip, then installs [backend/requirements.txt](backend/requirements.txt)
 - Start command runs `uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}`
 
 Railway service settings:
