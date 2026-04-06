@@ -9,11 +9,11 @@ from pydantic import BaseModel
 
 try:
     from model import analyze_anomaly
-    from notifier import dispatch_alerts, is_escalation
+    from notifier import dispatch_alerts, is_escalation, notify_ticket_created
     from simulator import generate_data
 except ModuleNotFoundError:
     from .model import analyze_anomaly
-    from .notifier import dispatch_alerts, is_escalation
+    from .notifier import dispatch_alerts, is_escalation, notify_ticket_created
     from .simulator import generate_data
 
 app = FastAPI(title="Ghost HVAC API", version="1.0.0")
@@ -61,6 +61,7 @@ CLIENTS = [
         "device_type": "residential",
         "system_type": "Residential Split",
         "portfolio_mode": "review",
+        "customer_profile": "budget_sensitive",
     },
     {
         "client_id": 2,
@@ -70,6 +71,7 @@ CLIENTS = [
         "device_type": "residential",
         "system_type": "Heat Pump Split",
         "portfolio_mode": "stable",
+        "customer_profile": "premium",
     },
     {
         "client_id": 3,
@@ -79,6 +81,7 @@ CLIENTS = [
         "device_type": "commercial",
         "system_type": "RTU (Rooftop Unit)",
         "portfolio_mode": "urgent",
+        "customer_profile": "urgent_fixer",
     },
     {
         "client_id": 4,
@@ -88,6 +91,7 @@ CLIENTS = [
         "device_type": "industrial",
         "system_type": "Multi-zone Packaged",
         "portfolio_mode": "review",
+        "customer_profile": "landlord",
     },
 ]
 
@@ -95,6 +99,7 @@ _previous_pressure = 120.0
 _previous_severity = "NORMAL"
 _subscribers: list[dict] = []
 _tickets: list[dict] = []
+_report_history: list[dict] = []
 _next_ticket_id = 1
 _client_states: dict[int, dict[str, float | str]] = {
     int(client["client_id"]): {
@@ -117,12 +122,156 @@ class CreateClientRequest(BaseModel):
     device_type: str = "residential"
     system_type: str = "Residential Split"
     portfolio_mode: str = "stable"
+    customer_profile: str = "budget_sensitive"
 
 
 class CreateTicketRequest(BaseModel):
     issue: str = "Automated anomaly review"
     priority: str = "MEDIUM"
     notes: str = ""
+    assigned_to: str = "Mike"
+
+
+def _recommendation_for_behavior(
+    *,
+    customer_profile: str,
+    severity: str,
+    leak_risk: str,
+    trend: str,
+    cost_low: int,
+    cost_high: int,
+) -> str:
+    if customer_profile == "budget_sensitive":
+        if severity == "CRITICAL":
+            return (
+                f"Efficiency dropping. Estimated +${cost_low}-${cost_high}/month. "
+                "Monitor 2-3 weeks and schedule maintenance if trend worsens."
+            )
+        return (
+            f"Potential bill increase ${cost_low}-${cost_high}/month. "
+            "No immediate repair required; monitor trend and plan service."
+        )
+
+    if customer_profile == "landlord":
+        if leak_risk == "HIGH" or trend == "down":
+            return "Risk to tenant comfort and liability. Schedule inspection this week."
+        return "Monitor and bundle into planned maintenance visit."
+
+    if customer_profile == "premium":
+        return "Comfort-first account. Recommend proactive tune-up in next 48 hours."
+
+    # urgent_fixer (commercial-style)
+    return "Immediate inspection recommended to avoid downtime impact."
+
+
+def _create_ticket_internal(
+    *,
+    company_id: str,
+    client: dict,
+    issue: str,
+    priority: str,
+    notes: str,
+    assigned_to: str,
+    source: str,
+) -> dict:
+    global _next_ticket_id
+    ticket = {
+        "ticket_id": _next_ticket_id,
+        "company_id": company_id,
+        "client_id": int(client["client_id"]),
+        "client_name": client["name"],
+        "issue": issue.strip() or "Automated anomaly review",
+        "priority": priority.strip().upper() or "MEDIUM",
+        "notes": notes.strip(),
+        "assigned_to": assigned_to.strip() or "Mike",
+        "source": source,
+        "status": "OPEN",
+        "created_at": _utc_iso_now(),
+    }
+    _next_ticket_id += 1
+    _tickets.append(ticket)
+
+    notify_ticket_created(
+        client_name=str(client["name"]),
+        address=str(client["address"]),
+        issue=str(ticket["issue"]),
+        priority=str(ticket["priority"]),
+        assigned_to=str(ticket["assigned_to"]),
+    )
+
+    return ticket
+
+
+def _has_open_auto_ticket(company_id: str, client_id: int) -> bool:
+    for ticket in _tickets:
+        if (
+            ticket["company_id"] == company_id
+            and int(ticket["client_id"]) == client_id
+            and ticket.get("source") in {"AUTO_LEAK", "AUTO_LEAK_SIM"}
+            and ticket["status"] == "OPEN"
+        ):
+            return True
+    return False
+
+
+def _should_auto_ticket(
+    *,
+    leak_risk: str,
+    severity: str,
+    trend: str,
+    customer_profile: str,
+    leak_simulation: bool,
+) -> bool:
+    if leak_risk != "HIGH":
+        return False
+
+    # Explicit leak simulation should always queue a ticket for operator follow-up.
+    if leak_simulation:
+        return True
+
+    if customer_profile == "budget_sensitive":
+        # Soft escalation for residential budget-sensitive accounts during passive monitoring.
+        return trend == "down" and severity == "CRITICAL"
+
+    return True
+
+
+def _maybe_queue_auto_ticket(
+    *,
+    company_id: str,
+    client: dict,
+    analysis: dict,
+    leak_risk: str,
+    trend: str,
+    leak_simulation: bool,
+) -> None:
+    customer_profile = str(client.get("customer_profile", "budget_sensitive"))
+    severity = str(analysis["severity"])
+
+    should_auto_ticket = _should_auto_ticket(
+        leak_risk=leak_risk,
+        severity=severity,
+        trend=trend,
+        customer_profile=customer_profile,
+        leak_simulation=leak_simulation,
+    )
+
+    client_id = int(client["client_id"])
+    if should_auto_ticket and not _has_open_auto_ticket(company_id, client_id):
+        source = "AUTO_LEAK_SIM" if leak_simulation else "AUTO_LEAK"
+        _create_ticket_internal(
+            company_id=company_id,
+            client=client,
+            issue="Auto-ticket: high leak probability detected",
+            priority="HIGH",
+            notes=(
+                f"Auto-generated by fleet monitoring. severity={severity}, "
+                f"leak_risk={leak_risk}, trend={trend}, customer_profile={customer_profile}, "
+                f"leak_simulation={leak_simulation}"
+            ),
+            assigned_to="Mike",
+            source=source,
+        )
 
 
 def _utc_iso_now() -> str:
@@ -325,6 +474,24 @@ def clients(
 
         alert_count = len(analysis.get("alerts", []))
         runtime = float(data["runtime"])
+        customer_profile = str(client.get("customer_profile", "budget_sensitive"))
+        recommendation = _recommendation_for_behavior(
+            customer_profile=customer_profile,
+            severity=str(analysis["severity"]),
+            leak_risk=leak_risk,
+            trend=trend,
+            cost_low=int(analysis["cost_impact_low"]),
+            cost_high=int(analysis["cost_impact_high"]),
+        )
+
+        _maybe_queue_auto_ticket(
+            company_id=company_id,
+            client=client,
+            analysis=analysis,
+            leak_risk=leak_risk,
+            trend=trend,
+            leak_simulation=False,
+        )
 
         summary.append(
             {
@@ -338,6 +505,10 @@ def clients(
                 "health_score": health_score,
                 "trend": trend,
                 "leak_risk": leak_risk,
+                "customer_profile": customer_profile,
+                "recommendation": recommendation,
+                "cost_impact_low": analysis["cost_impact_low"],
+                "cost_impact_high": analysis["cost_impact_high"],
                 "alert_count": alert_count,
                 "runtime": runtime,
                 "last_update": data["timestamp"],
@@ -360,6 +531,12 @@ def create_client(
             detail="portfolio_mode must be one of: stable, review, urgent",
         )
 
+    if request.customer_profile not in {"urgent_fixer", "budget_sensitive", "landlord", "premium"}:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_profile must be one of: urgent_fixer, budget_sensitive, landlord, premium",
+        )
+
     next_client_id = max((int(client["client_id"]) for client in CLIENTS), default=0) + 1
     client = {
         "client_id": next_client_id,
@@ -369,6 +546,7 @@ def create_client(
         "device_type": request.device_type.strip() or "residential",
         "system_type": request.system_type.strip() or "Residential Split",
         "portfolio_mode": request.portfolio_mode,
+        "customer_profile": request.customer_profile,
     }
     CLIENTS.append(client)
     _client_states[next_client_id] = {
@@ -388,10 +566,20 @@ def client_detail(
 ) -> dict:
     client = _get_client_or_404(company_id=company_id, client_id=client_id)
     simulated = _simulate_for_client(client_id=client_id, profile=profile, leak=leak)
+    analysis = simulated["analysis"]
+    leak_risk = str(analysis["leak_label"])
+    _maybe_queue_auto_ticket(
+        company_id=company_id,
+        client=client,
+        analysis=analysis,
+        leak_risk=leak_risk,
+        trend="down" if leak else "flat",
+        leak_simulation=leak,
+    )
     return {
         "client": client,
         "data": simulated["data"],
-        "analysis": simulated["analysis"],
+        "analysis": analysis,
     }
 
 
@@ -401,27 +589,29 @@ def create_ticket(
     request: CreateTicketRequest,
     company_id: str = Query(DEFAULT_COMPANY_ID),
 ) -> dict:
-    global _next_ticket_id
     client = _get_client_or_404(company_id=company_id, client_id=client_id)
-    ticket = {
-        "ticket_id": _next_ticket_id,
-        "company_id": company_id,
-        "client_id": client_id,
-        "client_name": client["name"],
-        "issue": request.issue.strip() or "Automated anomaly review",
-        "priority": request.priority.strip().upper() or "MEDIUM",
-        "notes": request.notes.strip(),
-        "status": "OPEN",
-        "created_at": _utc_iso_now(),
-    }
-    _next_ticket_id += 1
-    _tickets.append(ticket)
+    ticket = _create_ticket_internal(
+        company_id=company_id,
+        client=client,
+        issue=request.issue,
+        priority=request.priority,
+        notes=request.notes,
+        assigned_to=request.assigned_to,
+        source="MANUAL",
+    )
     return {"message": "Ticket created.", "ticket": ticket}
 
 
 @app.get("/tickets")
-def list_tickets(company_id: str = Query(DEFAULT_COMPANY_ID)) -> list[dict]:
-    return [ticket for ticket in _tickets if ticket["company_id"] == company_id]
+def list_tickets(
+    company_id: str = Query(DEFAULT_COMPANY_ID),
+    role: str = Query("admin", pattern="^(admin|tech)$"),
+    tech_name: str = Query("Mike"),
+) -> list[dict]:
+    scoped = [ticket for ticket in _tickets if ticket["company_id"] == company_id]
+    if role == "tech":
+        return [ticket for ticket in scoped if str(ticket.get("assigned_to", "")) == tech_name]
+    return scoped
 
 
 @app.get("/clients/{client_id}/report")
@@ -435,6 +625,16 @@ def generate_client_report(
     simulated = _simulate_for_client(client_id=client_id, profile=profile, leak=False)
     data = simulated["data"]
     analysis = simulated["analysis"]
+
+    _report_history.append(
+        {
+            "company_id": company_id,
+            "client_id": client_id,
+            "format": format,
+            "generated_at": _utc_iso_now(),
+            "severity": analysis["severity"],
+        }
+    )
 
     if format == "csv":
         headers = [
@@ -492,6 +692,18 @@ def generate_client_report(
             "Content-Disposition": f'attachment; filename="client_{client_id}_report.pdf"'
         },
     )
+
+
+@app.get("/clients/{client_id}/reports/history")
+def report_history(client_id: int, company_id: str = Query(DEFAULT_COMPANY_ID)) -> list[dict]:
+    _get_client_or_404(company_id=company_id, client_id=client_id)
+    history = [
+        entry
+        for entry in _report_history
+        if entry["company_id"] == company_id and int(entry["client_id"]) == client_id
+    ]
+    history.sort(key=lambda item: item["generated_at"], reverse=True)
+    return history
 
 
 @app.post("/clients/{client_id}/reset")

@@ -13,6 +13,8 @@ SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "") or SMTP_USER
+ALERT_NOTIFICATION_PHONE = os.getenv("ALERT_NOTIFICATION_PHONE", "")
+ALERT_NOTIFICATION_EMAIL = os.getenv("ALERT_NOTIFICATION_EMAIL", "")
 
 _SEVERITY_RANK: dict[str, int] = {"NORMAL": 0, "WARNING": 1, "CRITICAL": 2}
 
@@ -75,3 +77,31 @@ def dispatch_alerts(
             send_sms(phone, sms_body)
         if email := subscriber.get("email"):
             send_email(email, email_subject, email_body)
+
+
+def notify_ticket_created(
+    *,
+    client_name: str,
+    address: str,
+    issue: str,
+    priority: str,
+    assigned_to: str,
+) -> None:
+    sms_message = (
+        f"[Ghost HVAC] New {priority} ticket at {address} ({client_name}). "
+        f"Issue: {issue}. Assigned: {assigned_to}."
+    )
+    email_subject = f"[Ghost HVAC] New Ticket - {client_name}"
+    email_body = (
+        "A new operational ticket was created.\n\n"
+        f"Client: {client_name}\n"
+        f"Address: {address}\n"
+        f"Issue: {issue}\n"
+        f"Priority: {priority}\n"
+        f"Assigned To: {assigned_to}\n"
+    )
+
+    if ALERT_NOTIFICATION_PHONE:
+        send_sms(ALERT_NOTIFICATION_PHONE, sms_message)
+    if ALERT_NOTIFICATION_EMAIL:
+        send_email(ALERT_NOTIFICATION_EMAIL, email_subject, email_body)

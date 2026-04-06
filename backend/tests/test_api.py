@@ -93,6 +93,7 @@ def test_create_client_endpoint() -> None:
             "device_type": "residential",
             "system_type": "Residential Split",
             "portfolio_mode": "stable",
+            "customer_profile": "budget_sensitive",
         },
     )
     assert response.status_code == 200
@@ -108,6 +109,7 @@ def test_create_ticket_and_list_tickets() -> None:
             "issue": "Check anomaly trend",
             "priority": "HIGH",
             "notes": "Created from automated test",
+            "assigned_to": "Mike",
         },
     )
     assert create_response.status_code == 200
@@ -120,6 +122,13 @@ def test_create_ticket_and_list_tickets() -> None:
     tickets = list_response.json()
     assert isinstance(tickets, list)
     assert any(ticket["client_id"] == 1 for ticket in tickets)
+
+    tech_view_response = client.get(
+        "/tickets?company_id=ghost-hvac-co&role=tech&tech_name=Mike"
+    )
+    assert tech_view_response.status_code == 200
+    tech_tickets = tech_view_response.json()
+    assert all(ticket["assigned_to"] == "Mike" for ticket in tech_tickets)
 
 
 def test_report_exports_csv_and_pdf() -> None:
@@ -136,3 +145,61 @@ def test_report_exports_csv_and_pdf() -> None:
     assert pdf_response.status_code == 200
     assert pdf_response.headers["content-type"].startswith("application/pdf")
     assert pdf_response.content.startswith(b"%PDF")
+
+
+def test_report_history_endpoint() -> None:
+    response = client.get(
+        "/clients/1/reports/history?company_id=ghost-hvac-co"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, list)
+    if payload:
+        assert {"format", "generated_at", "severity"}.issubset(payload[0].keys())
+
+
+def test_leak_simulation_queues_auto_ticket(monkeypatch) -> None:
+    backend_main._tickets.clear()
+
+    def fake_generate_data(*, leak: bool = False):
+        return {
+            "timestamp": "2026-01-01T00:00:00Z",
+            "pressure": 90.0,
+            "runtime": 12.0,
+            "superheat": 34.0,
+            "subcooling": 2.0,
+            "delta_t": 9.0,
+            "ambient_temp": 95.0,
+        }
+
+    def fake_analyze_anomaly(**kwargs):
+        return {
+            "alerts": ["Leak risk high"],
+            "severity": "CRITICAL",
+            "health_score": 62,
+            "leak_probability": 88,
+            "leak_label": "HIGH",
+            "efficiency_score": 61,
+            "cost_impact_low": 45,
+            "cost_impact_high": 95,
+            "failure_window": "3-7 days",
+            "customer_profile": "retail",
+            "ai_diagnosis": "Leak likely",
+            "ai_explanation": "High leak probability",
+        }
+
+    monkeypatch.setattr(backend_main, "generate_data", fake_generate_data)
+    monkeypatch.setattr(backend_main, "analyze_anomaly", fake_analyze_anomaly)
+
+    response = client.get("/clients/1?company_id=ghost-hvac-co&profile=retail&leak=true")
+    assert response.status_code == 200
+
+    tickets_response = client.get("/tickets?company_id=ghost-hvac-co")
+    assert tickets_response.status_code == 200
+    tickets = tickets_response.json()
+    assert any(
+        ticket["client_id"] == 1
+        and ticket["status"] == "OPEN"
+        and ticket["source"] in {"AUTO_LEAK", "AUTO_LEAK_SIM"}
+        for ticket in tickets
+    )

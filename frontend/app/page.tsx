@@ -5,6 +5,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 type Severity = "NORMAL" | "WARNING" | "CRITICAL";
 type CustomerProfile = "retail" | "industrial" | "enterprise";
+type CustomerBehaviorProfile =
+  | "urgent_fixer"
+  | "budget_sensitive"
+  | "landlord"
+  | "premium";
 type Priority = "URGENT" | "REVIEW" | "STABLE";
 type Trend = "up" | "down" | "flat";
 type LeakRisk = "LOW" | "MEDIUM" | "HIGH";
@@ -20,6 +25,10 @@ type ClientSummary = {
   health_score: number;
   trend: Trend;
   leak_risk: LeakRisk;
+  customer_profile: CustomerBehaviorProfile;
+  recommendation: string;
+  cost_impact_low: number;
+  cost_impact_high: number;
   alert_count: number;
   runtime: number;
   last_update: string;
@@ -32,6 +41,7 @@ type CreateClientPayload = {
   device_type: string;
   system_type: string;
   portfolio_mode: "stable" | "review" | "urgent";
+  customer_profile: CustomerBehaviorProfile;
 };
 
 type CreateTicketResponse = {
@@ -44,6 +54,8 @@ type CreateTicketResponse = {
     issue: string;
     priority: string;
     notes: string;
+    assigned_to: string;
+    source: string;
     status: string;
     created_at: string;
   };
@@ -57,6 +69,8 @@ type TicketItem = {
   issue: string;
   priority: string;
   notes: string;
+  assigned_to: string;
+  source: string;
   status: string;
   created_at: string;
 };
@@ -102,12 +116,16 @@ export default function Home() {
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [tickets, setTickets] = useState<TicketItem[]>([]);
   const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<"admin" | "tech">("admin");
+  const [techName, setTechName] = useState("Mike");
+  const [defaultAssignee, setDefaultAssignee] = useState("Mike");
   const [newClient, setNewClient] = useState<CreateClientPayload>({
     name: "",
     address: "",
     device_type: "residential",
     system_type: "Residential Split",
     portfolio_mode: "stable",
+    customer_profile: "budget_sensitive",
   });
   const [isCreatingClient, setIsCreatingClient] = useState(false);
 
@@ -150,9 +168,12 @@ export default function Home() {
         throw new Error("Missing NEXT_PUBLIC_API_URL. Configure your backend URL.");
       }
 
-      const response = await fetch(`${baseUrl}/tickets?company_id=${COMPANY_ID}`, {
-        cache: "no-store",
-      });
+      const response = await fetch(
+        `${baseUrl}/tickets?company_id=${COMPANY_ID}&role=${userRole}&tech_name=${encodeURIComponent(techName)}`,
+        {
+          cache: "no-store",
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`Tickets request failed with ${response.status}`);
@@ -168,7 +189,7 @@ export default function Home() {
         error instanceof Error ? error.message : "Unknown ticket loading error.";
       setTicketsError(message);
     }
-  }, []);
+  }, [techName, userRole]);
 
   useEffect(() => {
     void loadClients();
@@ -314,6 +335,7 @@ export default function Home() {
               issue: `Fleet alert follow-up (${client.priority})`,
               priority: client.priority,
               notes: `Auto-created from dashboard. Status=${client.status}, LeakRisk=${client.leak_risk}`,
+              assigned_to: defaultAssignee,
             }),
           }
         );
@@ -330,7 +352,7 @@ export default function Home() {
         setIsActionBusy(false);
       }
     },
-    [loadTickets]
+    [defaultAssignee, loadTickets]
   );
 
   const downloadClientReport = useCallback(
@@ -403,6 +425,7 @@ export default function Home() {
         device_type: "residential",
         system_type: "Residential Split",
         portfolio_mode: "stable",
+        customer_profile: "budget_sensitive",
       });
       await loadClients();
     } catch (error) {
@@ -543,11 +566,48 @@ export default function Home() {
                 <option value="enterprise">Multi-site Enterprise</option>
               </select>
             </div>
+            <div className="w-full max-w-xs">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+                View Role
+              </label>
+              <select
+                value={userRole}
+                onChange={(e) => setUserRole(e.target.value as "admin" | "tech")}
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              >
+                <option value="admin">Admin (full fleet)</option>
+                <option value="tech">Tech (assigned tickets)</option>
+              </select>
+            </div>
+            <div className="w-full max-w-xs">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+                Tech Context
+              </label>
+              <input
+                type="text"
+                value={techName}
+                onChange={(e) => setTechName(e.target.value || "Mike")}
+                placeholder="Tech name"
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              />
+            </div>
+            <div className="w-full max-w-xs">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+                Notify Tech Defaults To
+              </label>
+              <input
+                type="text"
+                value={defaultAssignee}
+                onChange={(e) => setDefaultAssignee(e.target.value || "Mike")}
+                placeholder="Assignee"
+                className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              />
+            </div>
           </div>
 
           <section className="mb-5 rounded-xl border border-slate-800 bg-slate-900/55 p-4">
             <h3 className="font-heading text-sm uppercase tracking-widest text-cyan-300">Add New Client</h3>
-            <div className="mt-3 grid gap-3 md:grid-cols-5">
+            <div className="mt-3 grid gap-3 md:grid-cols-6">
               <input
                 type="text"
                 value={newClient.name}
@@ -586,6 +646,21 @@ export default function Home() {
                 <option value="review">Review</option>
                 <option value="urgent">Urgent</option>
               </select>
+              <select
+                value={newClient.customer_profile}
+                onChange={(e) =>
+                  setNewClient((prev) => ({
+                    ...prev,
+                    customer_profile: e.target.value as CustomerBehaviorProfile,
+                  }))
+                }
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              >
+                <option value="budget_sensitive">Budget Sensitive</option>
+                <option value="urgent_fixer">Urgent Fixer</option>
+                <option value="landlord">Landlord</option>
+                <option value="premium">Premium</option>
+              </select>
               <button
                 type="button"
                 onClick={() => void handleCreateClient()}
@@ -617,6 +692,8 @@ export default function Home() {
                     <th className="px-3 py-3">Type</th>
                     <th className="px-3 py-3">Alerts</th>
                     <th className="px-3 py-3">AI Insight</th>
+                    <th className="px-3 py-3">Recommendation</th>
+                    <th className="px-3 py-3">Cost Impact</th>
                     <th className="px-3 py-3">Last Update</th>
                     <th className="px-3 py-3">Quick Actions</th>
                   </tr>
@@ -651,6 +728,12 @@ export default function Home() {
                       <td className="px-3 py-3 text-amber-300">🔔 {client.alert_count}</td>
                       <td className="max-w-[250px] truncate px-3 py-3 text-slate-300">
                         {client.ai_insight}
+                      </td>
+                      <td className="max-w-[260px] truncate px-3 py-3 text-slate-300" title={client.recommendation}>
+                        {client.recommendation}
+                      </td>
+                      <td className="px-3 py-3 text-emerald-300">
+                        ${client.cost_impact_low}-${client.cost_impact_high}
                       </td>
                       <td className="px-3 py-3 text-slate-400">
                         <p>Live</p>
@@ -698,7 +781,7 @@ export default function Home() {
                   ))}
                   {filteredClients.length === 0 && !loading ? (
                     <tr>
-                      <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
+                      <td colSpan={13} className="px-3 py-8 text-center text-slate-500">
                         No clients match the current filters.
                       </td>
                     </tr>
@@ -736,6 +819,8 @@ export default function Home() {
                         </span>
                       </div>
                       <p className="text-xs text-slate-300">{ticket.issue}</p>
+                      <p className="text-[11px] text-slate-400">Assigned: {ticket.assigned_to}</p>
+                      <p className="text-[11px] text-slate-500">Source: {ticket.source}</p>
                       <p className="mt-1 text-[11px] text-slate-500">
                         Created: {formatUpdatedTime(ticket.created_at)}
                       </p>
