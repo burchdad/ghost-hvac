@@ -17,6 +17,8 @@ def test_normal_when_no_rules_triggered() -> None:
     )
     assert result["severity"] == "NORMAL"
     assert result["alerts"] == []
+    assert result["health_score"] >= 80
+    assert result["customer_profile"] == "retail"
 
 
 def test_warning_when_only_pressure_drop_rule_triggers() -> None:
@@ -40,15 +42,29 @@ def test_warning_when_only_runtime_rule_triggers() -> None:
     )
     assert result["severity"] == "WARNING"
     assert len(result["alerts"]) == 1
-    assert "Runtime" in result["alerts"][0]
+    assert "runtime" in result["alerts"][0].lower()
 
 
 def test_critical_when_both_rules_trigger() -> None:
     result = analyze_anomaly(
         pressure=112.0,
         prev_pressure=120.0,
-        runtime=14.5,
+        runtime=16.0,
         baseline_runtime=10.0,
+        superheat=22.0,
+        subcooling=3.0,
+        delta_t=9.0,
     )
     assert result["severity"] == "CRITICAL"
-    assert len(result["alerts"]) == 2
+    assert len(result["alerts"]) >= 2
+
+
+def test_profile_defaults_to_retail_for_unknown_values() -> None:
+    result = analyze_anomaly(
+        pressure=120.0,
+        prev_pressure=120.0,
+        runtime=10.0,
+        baseline_runtime=10.0,
+        customer_profile="unknown",
+    )
+    assert result["customer_profile"] == "retail"
