@@ -38,7 +38,27 @@ type CreateTicketResponse = {
   message: string;
   ticket: {
     ticket_id: number;
+    company_id: string;
+    client_id: number;
+    client_name: string;
+    issue: string;
+    priority: string;
+    notes: string;
+    status: string;
+    created_at: string;
   };
+};
+
+type TicketItem = {
+  ticket_id: number;
+  company_id: string;
+  client_id: number;
+  client_name: string;
+  issue: string;
+  priority: string;
+  notes: string;
+  status: string;
+  created_at: string;
 };
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
@@ -80,6 +100,8 @@ export default function Home() {
   const [typeFilter, setTypeFilter] = useState<"ALL" | string>("ALL");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [isActionBusy, setIsActionBusy] = useState(false);
+  const [tickets, setTickets] = useState<TicketItem[]>([]);
+  const [ticketsError, setTicketsError] = useState<string | null>(null);
   const [newClient, setNewClient] = useState<CreateClientPayload>({
     name: "",
     address: "",
@@ -120,16 +142,46 @@ export default function Home() {
     }
   }, [profile]);
 
+  const loadTickets = useCallback(async () => {
+    setTicketsError(null);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        throw new Error("Missing NEXT_PUBLIC_API_URL. Configure your backend URL.");
+      }
+
+      const response = await fetch(`${baseUrl}/tickets?company_id=${COMPANY_ID}`, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error(`Tickets request failed with ${response.status}`);
+      }
+
+      const payload = (await response.json()) as TicketItem[];
+      const openTickets = payload
+        .filter((ticket) => ticket.status === "OPEN")
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      setTickets(openTickets);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown ticket loading error.";
+      setTicketsError(message);
+    }
+  }, []);
+
   useEffect(() => {
     void loadClients();
+    void loadTickets();
     const timerId = window.setInterval(() => {
       void loadClients();
+      void loadTickets();
     }, POLL_INTERVAL_MS);
 
     return () => {
       window.clearInterval(timerId);
     };
-  }, [loadClients]);
+  }, [loadClients, loadTickets]);
 
   useEffect(() => {
     if (!actionMessage) {
@@ -270,6 +322,7 @@ export default function Home() {
         }
         const payload = (await response.json()) as CreateTicketResponse;
         setActionMessage(`Ticket #${payload.ticket.ticket_id} created for ${client.name}`);
+        await loadTickets();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to create ticket.";
         setActionMessage(message);
@@ -277,7 +330,7 @@ export default function Home() {
         setIsActionBusy(false);
       }
     },
-    []
+    [loadTickets]
   );
 
   const downloadClientReport = useCallback(
@@ -550,107 +603,147 @@ export default function Home() {
             </p>
           ) : null}
 
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-800 text-left text-sm">
-              <thead className="text-xs uppercase tracking-wider text-slate-500">
-                <tr>
-                  <th className="px-3 py-3">Client</th>
-                  <th className="px-3 py-3">Priority</th>
-                  <th className="px-3 py-3">Status</th>
-                  <th className="px-3 py-3">Health</th>
-                  <th className="px-3 py-3">Trend</th>
-                  <th className="px-3 py-3">Leak Risk</th>
-                  <th className="px-3 py-3">Type</th>
-                  <th className="px-3 py-3">Alerts</th>
-                  <th className="px-3 py-3">AI Insight</th>
-                  <th className="px-3 py-3">Last Update</th>
-                  <th className="px-3 py-3">Quick Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900 text-slate-300">
-                {filteredClients.map((client) => (
-                  <tr
-                    key={client.client_id}
-                    className="cursor-pointer hover:bg-slate-900/50"
-                    onClick={() => router.push(`/client/${client.client_id}`)}
-                  >
-                    <td className="px-3 py-3">
-                      <p className="font-semibold text-slate-100">{client.name}</p>
-                      <p className="text-xs text-slate-500">{client.address}</p>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${priorityStyle(client.priority)}`}>
-                        {client.priority}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3">
-                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyle(client.status)}`}>
-                        {client.status}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 font-semibold tabular-nums text-cyan-300">
-                      {client.health_score}%
-                    </td>
-                    <td className="px-3 py-3 text-slate-200">{trendDisplay(client.trend)}</td>
-                    <td className="px-3 py-3">{client.leak_risk}</td>
-                    <td className="px-3 py-3">{client.system_type}</td>
-                    <td className="px-3 py-3 text-amber-300">🔔 {client.alert_count}</td>
-                    <td className="max-w-[250px] truncate px-3 py-3 text-slate-300">
-                      {client.ai_insight}
-                    </td>
-                    <td className="px-3 py-3 text-slate-400">
-                      <p>Live</p>
-                      <p className="text-xs">Updated: {formatUpdatedTime(client.last_update)}</p>
-                    </td>
-                    <td
-                      className="px-3 py-3"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20"
-                          onClick={() => router.push(`/client/${client.client_id}`)}
-                        >
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/20"
-                          onClick={() => void createTicketForClient(client)}
-                          disabled={isActionBusy}
-                        >
-                          Notify Tech
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-xs font-semibold text-violet-300 hover:bg-violet-500/20"
-                          onClick={() => void downloadClientReport(client, "csv")}
-                          disabled={isActionBusy}
-                        >
-                          Report CSV
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-2 py-1 text-xs font-semibold text-fuchsia-300 hover:bg-fuchsia-500/20"
-                          onClick={() => void downloadClientReport(client, "pdf")}
-                          disabled={isActionBusy}
-                        >
-                          Report PDF
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {filteredClients.length === 0 && !loading ? (
+          <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-800 text-left text-sm">
+                <thead className="text-xs uppercase tracking-wider text-slate-500">
                   <tr>
-                    <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
-                      No clients match the current filters.
-                    </td>
+                    <th className="px-3 py-3">Client</th>
+                    <th className="px-3 py-3">Priority</th>
+                    <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3">Health</th>
+                    <th className="px-3 py-3">Trend</th>
+                    <th className="px-3 py-3">Leak Risk</th>
+                    <th className="px-3 py-3">Type</th>
+                    <th className="px-3 py-3">Alerts</th>
+                    <th className="px-3 py-3">AI Insight</th>
+                    <th className="px-3 py-3">Last Update</th>
+                    <th className="px-3 py-3">Quick Actions</th>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-900 text-slate-300">
+                  {filteredClients.map((client) => (
+                    <tr
+                      key={client.client_id}
+                      className="cursor-pointer hover:bg-slate-900/50"
+                      onClick={() => router.push(`/client/${client.client_id}`)}
+                    >
+                      <td className="px-3 py-3">
+                        <p className="font-semibold text-slate-100">{client.name}</p>
+                        <p className="text-xs text-slate-500">{client.address}</p>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${priorityStyle(client.priority)}`}>
+                          {client.priority}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${statusStyle(client.status)}`}>
+                          {client.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 font-semibold tabular-nums text-cyan-300">
+                        {client.health_score}%
+                      </td>
+                      <td className="px-3 py-3 text-slate-200">{trendDisplay(client.trend)}</td>
+                      <td className="px-3 py-3">{client.leak_risk}</td>
+                      <td className="px-3 py-3">{client.system_type}</td>
+                      <td className="px-3 py-3 text-amber-300">🔔 {client.alert_count}</td>
+                      <td className="max-w-[250px] truncate px-3 py-3 text-slate-300">
+                        {client.ai_insight}
+                      </td>
+                      <td className="px-3 py-3 text-slate-400">
+                        <p>Live</p>
+                        <p className="text-xs">Updated: {formatUpdatedTime(client.last_update)}</p>
+                      </td>
+                      <td
+                        className="px-3 py-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20"
+                            onClick={() => router.push(`/client/${client.client_id}`)}
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/20"
+                            onClick={() => void createTicketForClient(client)}
+                            disabled={isActionBusy}
+                          >
+                            Notify Tech
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-xs font-semibold text-violet-300 hover:bg-violet-500/20"
+                            onClick={() => void downloadClientReport(client, "csv")}
+                            disabled={isActionBusy}
+                          >
+                            Report CSV
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-2 py-1 text-xs font-semibold text-fuchsia-300 hover:bg-fuchsia-500/20"
+                            onClick={() => void downloadClientReport(client, "pdf")}
+                            disabled={isActionBusy}
+                          >
+                            Report PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredClients.length === 0 && !loading ? (
+                    <tr>
+                      <td colSpan={11} className="px-3 py-8 text-center text-slate-500">
+                        No clients match the current filters.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            <aside className="h-fit rounded-xl border border-slate-800 bg-slate-900/60 p-4 xl:sticky xl:top-6">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-heading text-sm uppercase tracking-widest text-cyan-300">
+                  Open Tickets
+                </h3>
+                <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300">
+                  {tickets.length}
+                </span>
+              </div>
+
+              {ticketsError ? (
+                <p className="mb-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-300">
+                  {ticketsError}
+                </p>
+              ) : null}
+
+              {tickets.length === 0 ? (
+                <p className="text-sm text-slate-500">No open tickets. Notify Tech actions will appear here.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {tickets.slice(0, 12).map((ticket) => (
+                    <li key={ticket.ticket_id} className="rounded-lg border border-slate-800 bg-slate-950/80 p-2">
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold text-slate-100">#{ticket.ticket_id} {ticket.client_name}</p>
+                        <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
+                          {ticket.priority}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300">{ticket.issue}</p>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Created: {formatUpdatedTime(ticket.created_at)}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </aside>
           </div>
 
           <p className="mt-4 text-xs text-slate-500">
