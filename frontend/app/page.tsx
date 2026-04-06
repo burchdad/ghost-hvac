@@ -26,6 +26,21 @@ type ClientSummary = {
   ai_insight: string;
 };
 
+type CreateClientPayload = {
+  name: string;
+  address: string;
+  device_type: string;
+  system_type: string;
+  portfolio_mode: "stable" | "review" | "urgent";
+};
+
+type CreateTicketResponse = {
+  message: string;
+  ticket: {
+    ticket_id: number;
+  };
+};
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const COMPANY_ID = process.env.NEXT_PUBLIC_COMPANY_ID ?? "ghost-hvac-co";
 const POLL_INTERVAL_MS = 3000;
@@ -64,6 +79,15 @@ export default function Home() {
   const [riskFilter, setRiskFilter] = useState<"ALL" | LeakRisk>("ALL");
   const [typeFilter, setTypeFilter] = useState<"ALL" | string>("ALL");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [isActionBusy, setIsActionBusy] = useState(false);
+  const [newClient, setNewClient] = useState<CreateClientPayload>({
+    name: "",
+    address: "",
+    device_type: "residential",
+    system_type: "Residential Split",
+    portfolio_mode: "stable",
+  });
+  const [isCreatingClient, setIsCreatingClient] = useState(false);
 
   const loadClients = useCallback(async () => {
     setLoading(true);
@@ -219,9 +243,122 @@ export default function Home() {
     return types.sort();
   }, [clients]);
 
-  const onQuickAction = useCallback((label: string, clientName: string) => {
-    setActionMessage(`${label} queued for ${clientName}`);
-  }, []);
+  const createTicketForClient = useCallback(
+    async (client: ClientSummary) => {
+      setIsActionBusy(true);
+      try {
+        const baseUrl = resolveApiBaseUrl();
+        if (!baseUrl) {
+          throw new Error("API URL not configured.");
+        }
+        const response = await fetch(
+          `${baseUrl}/clients/${client.client_id}/tickets?company_id=${COMPANY_ID}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              issue: `Fleet alert follow-up (${client.priority})`,
+              priority: client.priority,
+              notes: `Auto-created from dashboard. Status=${client.status}, LeakRisk=${client.leak_risk}`,
+            }),
+          }
+        );
+        if (!response.ok) {
+          throw new Error(`Ticket request failed with ${response.status}`);
+        }
+        const payload = (await response.json()) as CreateTicketResponse;
+        setActionMessage(`Ticket #${payload.ticket.ticket_id} created for ${client.name}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to create ticket.";
+        setActionMessage(message);
+      } finally {
+        setIsActionBusy(false);
+      }
+    },
+    []
+  );
+
+  const downloadClientReport = useCallback(
+    async (client: ClientSummary, format: "csv" | "pdf") => {
+      setIsActionBusy(true);
+      try {
+        const baseUrl = resolveApiBaseUrl();
+        if (!baseUrl) {
+          throw new Error("API URL not configured.");
+        }
+        const response = await fetch(
+          `${baseUrl}/clients/${client.client_id}/report?company_id=${COMPANY_ID}&profile=${profile}&format=${format}`,
+          {
+            cache: "no-store",
+          }
+        );
+        if (!response.ok) {
+          throw new Error(`Report request failed with ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `client_${client.client_id}_report.${format}`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.URL.revokeObjectURL(url);
+        setActionMessage(`${format.toUpperCase()} report downloaded for ${client.name}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to generate report.";
+        setActionMessage(message);
+      } finally {
+        setIsActionBusy(false);
+      }
+    },
+    [profile]
+  );
+
+  const handleCreateClient = useCallback(async () => {
+    if (!newClient.name.trim() || !newClient.address.trim()) {
+      setActionMessage("Name and address are required to add a client.");
+      return;
+    }
+
+    setIsCreatingClient(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        throw new Error("API URL not configured.");
+      }
+
+      const response = await fetch(`${baseUrl}/clients?company_id=${COMPANY_ID}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(newClient),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Create client failed with ${response.status}`);
+      }
+
+      setActionMessage(`Client ${newClient.name} added to dashboard.`);
+      setNewClient({
+        name: "",
+        address: "",
+        device_type: "residential",
+        system_type: "Residential Split",
+        portfolio_mode: "stable",
+      });
+      await loadClients();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to create client.";
+      setActionMessage(message);
+    } finally {
+      setIsCreatingClient(false);
+    }
+  }, [loadClients, newClient]);
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-10 sm:px-8 lg:px-12">
@@ -355,6 +492,58 @@ export default function Home() {
             </div>
           </div>
 
+          <section className="mb-5 rounded-xl border border-slate-800 bg-slate-900/55 p-4">
+            <h3 className="font-heading text-sm uppercase tracking-widest text-cyan-300">Add New Client</h3>
+            <div className="mt-3 grid gap-3 md:grid-cols-5">
+              <input
+                type="text"
+                value={newClient.name}
+                onChange={(e) => setNewClient((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="Client name"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              />
+              <input
+                type="text"
+                value={newClient.address}
+                onChange={(e) => setNewClient((prev) => ({ ...prev, address: e.target.value }))}
+                placeholder="Address"
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              />
+              <select
+                value={newClient.system_type}
+                onChange={(e) => setNewClient((prev) => ({ ...prev, system_type: e.target.value }))}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              >
+                <option value="Residential Split">Residential Split</option>
+                <option value="Heat Pump Split">Heat Pump Split</option>
+                <option value="RTU (Rooftop Unit)">RTU (Rooftop Unit)</option>
+                <option value="Multi-zone Packaged">Multi-zone Packaged</option>
+              </select>
+              <select
+                value={newClient.portfolio_mode}
+                onChange={(e) =>
+                  setNewClient((prev) => ({
+                    ...prev,
+                    portfolio_mode: e.target.value as "stable" | "review" | "urgent",
+                  }))
+                }
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+              >
+                <option value="stable">Stable</option>
+                <option value="review">Review</option>
+                <option value="urgent">Urgent</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => void handleCreateClient()}
+                disabled={isCreatingClient}
+                className="rounded-lg border border-emerald-500/45 bg-emerald-500/20 px-3 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 disabled:opacity-60"
+              >
+                {isCreatingClient ? "Adding..." : "Add Client"}
+              </button>
+            </div>
+          </section>
+
           {errorMessage ? (
             <p className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
               Error: {errorMessage}
@@ -428,16 +617,26 @@ export default function Home() {
                         <button
                           type="button"
                           className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/20"
-                          onClick={() => onQuickAction("Notify Tech", client.name)}
+                          onClick={() => void createTicketForClient(client)}
+                          disabled={isActionBusy}
                         >
                           Notify Tech
                         </button>
                         <button
                           type="button"
                           className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-xs font-semibold text-violet-300 hover:bg-violet-500/20"
-                          onClick={() => onQuickAction("Generate Report", client.name)}
+                          onClick={() => void downloadClientReport(client, "csv")}
+                          disabled={isActionBusy}
                         >
-                          Generate Report
+                          Report CSV
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-2 py-1 text-xs font-semibold text-fuchsia-300 hover:bg-fuchsia-500/20"
+                          onClick={() => void downloadClientReport(client, "pdf")}
+                          disabled={isActionBusy}
+                        >
+                          Report PDF
                         </button>
                       </div>
                     </td>
