@@ -54,3 +54,24 @@ Services:
 
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8000
+
+## Deploy Backend To Railway
+
+This repository is a monorepo, so Railway may not auto-detect the backend without explicit config.
+
+Included config:
+
+- [railway.toml](railway.toml) uses Nixpacks
+- Build command installs [backend/requirements.txt](backend/requirements.txt)
+- Start command runs `uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}`
+
+Railway service settings:
+
+1. Create a new service from this repo.
+2. Keep Root Directory as repository root.
+3. Deploy.
+
+If you prefer deploying only the backend folder directly, set Root Directory to `backend` and use:
+
+- Build command: `pip install -r requirements.txt`
+- Start command: `uvicorn main:app --host 0.0.0.0 --port ${PORT}`
