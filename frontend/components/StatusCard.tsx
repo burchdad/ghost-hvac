@@ -34,10 +34,14 @@ export default function StatusCard({
   lastUpdated,
 }: StatusCardProps) {
   const style = severityStyles[severity];
+  const criticalVisual =
+    severity === "CRITICAL"
+      ? "animate-criticalCard border-rose-400/80 shadow-[0_0_65px_-14px_rgba(244,63,94,0.95)]"
+      : "";
 
   return (
     <section
-      className={`rounded-2xl border ${style.border} bg-slate-950/70 p-6 shadow-[0_0_60px_-20px_rgba(30,41,59,0.9)] backdrop-blur`}
+      className={`rounded-2xl border ${style.border} ${criticalVisual} bg-slate-950/70 p-6 shadow-[0_0_60px_-20px_rgba(30,41,59,0.9)] backdrop-blur`}
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>

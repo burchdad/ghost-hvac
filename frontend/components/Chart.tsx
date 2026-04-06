@@ -5,6 +5,8 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -20,13 +22,17 @@ export type HistoryPoint = {
 
 type ChartProps = {
   data: HistoryPoint[];
+  leakEventTime: string | null;
+  isCritical: boolean;
 };
 
-export default function Chart({ data }: ChartProps) {
+export default function Chart({ data, leakEventTime, isCritical }: ChartProps) {
+  const latestTime = data.length > 0 ? data[data.length - 1].time : undefined;
+
   return (
-    <section className="rounded-2xl border border-cyan-500/25 bg-slate-950/65 p-6 backdrop-blur">
+    <section className={`rounded-2xl border bg-slate-950/65 p-6 backdrop-blur ${isCritical ? "border-rose-500/35" : "border-cyan-500/25"}`}>
       <h2 className="font-heading mb-4 text-xl tracking-wide text-slate-100">
-        Runtime Telemetry
+        Runtime Telemetry with Event Context
       </h2>
 
       <div className="h-[320px] w-full">
@@ -42,6 +48,19 @@ export default function Chart({ data }: ChartProps) {
                 borderRadius: "12px",
               }}
             />
+
+            {leakEventTime ? (
+              <ReferenceLine
+                x={leakEventTime}
+                stroke="#fb7185"
+                strokeDasharray="4 4"
+                label={{ value: "Leak detected", position: "top", fill: "#fda4af", fontSize: 11 }}
+              />
+            ) : null}
+            {leakEventTime && latestTime ? (
+              <ReferenceArea x1={leakEventTime} x2={latestTime} fill="#881337" fillOpacity={0.1} />
+            ) : null}
+
             <Legend />
             <Line
               type="monotone"

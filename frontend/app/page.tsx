@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 
 import type { HistoryPoint } from "@/components/Chart";
@@ -28,6 +28,11 @@ type SimulationResponse = {
     health_score: number;
     leak_probability: number;
     leak_label: "LOW" | "MEDIUM" | "HIGH";
+    efficiency_score: number;
+    cost_impact_low: number;
+    cost_impact_high: number;
+    failure_window: string;
+    ai_diagnosis: string;
     ai_explanation: string;
   };
 };
@@ -85,14 +90,22 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [healthScore, setHealthScore] = useState<number>(100);
+  const [displayHealthScore, setDisplayHealthScore] = useState<number>(100);
   const [leakProbability, setLeakProbability] = useState<number>(0);
   const [leakLabel, setLeakLabel] = useState<"LOW" | "MEDIUM" | "HIGH">("LOW");
-  const [aiExplanation, setAiExplanation] = useState<string>("");
+  const [efficiencyScore, setEfficiencyScore] = useState<number>(100);
+  const [costImpactLow, setCostImpactLow] = useState<number>(0);
+  const [costImpactHigh, setCostImpactHigh] = useState<number>(0);
+  const [failureWindow, setFailureWindow] = useState<string>("30+ days");
+  const [aiDiagnosis, setAiDiagnosis] = useState<string>("");
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [leakEventTime, setLeakEventTime] = useState<string | null>(null);
   const [latestData, setLatestData] = useState<{ pressure: number; runtime: number; superheat: number; subcooling: number; delta_t: number; ambient_temp: number } | null>(null);
   const [alertPhone, setAlertPhone] = useState("");
   const [alertEmail, setAlertEmail] = useState("");
   const [subscribeStatus, setSubscribeStatus] = useState<string | null>(null);
   const [isSubscribing, setIsSubscribing] = useState(false);
+  const previousSeverity = useRef<Severity>("NORMAL");
 
   const fetchSimulation = useCallback(async (leak: boolean) => {
     setIsLoading(true);
@@ -136,7 +149,14 @@ export default function Home() {
       setHealthScore(payload.analysis.health_score);
       setLeakProbability(payload.analysis.leak_probability);
       setLeakLabel(payload.analysis.leak_label);
-      setAiExplanation(payload.analysis.ai_explanation);
+      setEfficiencyScore(payload.analysis.efficiency_score);
+      setCostImpactLow(payload.analysis.cost_impact_low);
+      setCostImpactHigh(payload.analysis.cost_impact_high);
+      setFailureWindow(payload.analysis.failure_window);
+      setAiDiagnosis(payload.analysis.ai_diagnosis || payload.analysis.ai_explanation);
+      if (!leakEventTime && payload.analysis.severity !== "NORMAL") {
+        setLeakEventTime(displayTime);
+      }
       setLatestData({
         pressure: payload.data.pressure,
         runtime: payload.data.runtime,
@@ -162,7 +182,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [leakEventTime]);
 
   useEffect(() => {
     fetchSimulation(leakMode);
@@ -175,6 +195,68 @@ export default function Home() {
       window.clearInterval(timerId);
     };
   }, [fetchSimulation, leakMode]);
+
+  useEffect(() => {
+    if (displayHealthScore === healthScore) {
+      return;
+    }
+
+    const delta = healthScore - displayHealthScore;
+    const step = Math.abs(delta) > 10 ? Math.sign(delta) * 4 : Math.sign(delta) * 1;
+    const timer = window.setTimeout(() => {
+      setDisplayHealthScore((prev) => {
+        const next = prev + step;
+        if ((step > 0 && next > healthScore) || (step < 0 && next < healthScore)) {
+          return healthScore;
+        }
+        return next;
+      });
+    }, 55);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [displayHealthScore, healthScore]);
+
+  useEffect(() => {
+    const prev = previousSeverity.current;
+    if (
+      (severity === "WARNING" || severity === "CRITICAL") &&
+      (prev === "NORMAL" || (prev === "WARNING" && severity === "CRITICAL"))
+    ) {
+      const message =
+        severity === "CRITICAL"
+          ? "Critical HVAC anomaly detected. Immediate attention recommended."
+          : "Warning: system behavior is drifting from baseline.";
+      setToastMessage(message);
+
+      try {
+        const audioCtx = new window.AudioContext();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = severity === "CRITICAL" ? 880 : 660;
+        gainNode.gain.value = 0.03;
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.12);
+      } catch {
+        // Audio may be blocked by browser policies; toast still provides immediate feedback.
+      }
+    }
+    previousSeverity.current = severity;
+  }, [severity]);
+
+  useEffect(() => {
+    if (!toastMessage) {
+      return;
+    }
+    const timer = window.setTimeout(() => setToastMessage(null), 3500);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [toastMessage]);
 
   const handleLeak = useCallback(() => {
     setLeakMode(true);
@@ -213,9 +295,16 @@ export default function Home() {
         setAlertLog([]);
         setSeverity("NORMAL");
         setHealthScore(100);
+        setDisplayHealthScore(100);
         setLeakProbability(0);
         setLeakLabel("LOW");
-        setAiExplanation("");
+        setEfficiencyScore(100);
+        setCostImpactLow(0);
+        setCostImpactHigh(0);
+        setFailureWindow("30+ days");
+        setAiDiagnosis("");
+        setToastMessage(null);
+        setLeakEventTime(null);
         setLatestData(null);
         setLastUpdated(null);
         await fetchSimulation(false);
@@ -260,7 +349,7 @@ export default function Home() {
   );
 
   const healthColor =
-    healthScore >= 70 ? "text-emerald-400" : healthScore >= 40 ? "text-amber-400" : "text-rose-400";
+    displayHealthScore >= 70 ? "text-emerald-400" : displayHealthScore >= 40 ? "text-amber-400" : "text-rose-400";
 
   const leakBadgeStyle =
     leakLabel === "HIGH"
@@ -270,9 +359,15 @@ export default function Home() {
         : "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40";
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-10 sm:px-8 lg:px-12">
+    <main className={`relative min-h-screen overflow-hidden px-4 pb-12 pt-10 sm:px-8 lg:px-12 ${severity === "CRITICAL" ? "critical-scene" : ""}`}>
       <div className="ghost-orb ghost-orb-left" aria-hidden="true" />
       <div className="ghost-orb ghost-orb-right" aria-hidden="true" />
+
+      {toastMessage ? (
+        <div className="fixed right-4 top-4 z-50 animate-toastIn rounded-xl border border-rose-400/60 bg-rose-950/90 px-4 py-3 text-sm text-rose-100 shadow-[0_0_30px_-8px_rgba(244,63,94,0.8)]">
+          {toastMessage}
+        </div>
+      ) : null}
 
       <div className="mx-auto max-w-6xl animate-fadeIn space-y-6">
         <header className="rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-6 shadow-[0_0_80px_-25px_rgba(6,182,212,0.4)] backdrop-blur">
@@ -290,26 +385,35 @@ export default function Home() {
           </div>
         </header>
 
+        {severity === "CRITICAL" ? (
+          <section className="critical-banner animate-criticalBanner rounded-2xl border border-rose-400/60 bg-rose-950/60 p-4 shadow-[0_0_45px_-10px_rgba(244,63,94,0.9)]">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-rose-200">Live Incident</p>
+            <p className="mt-1 text-base text-rose-100 sm:text-lg">
+              Live system currently experiencing critical performance degradation.
+            </p>
+          </section>
+        ) : null}
+
         {/* ── EXECUTIVE ROW ─────────────────────────────────────────────── */}
         <div className="grid gap-4 sm:grid-cols-3">
           {/* System Status */}
           <StatusCard severity={severity} alerts={currentAlerts} lastUpdated={lastUpdated} />
 
           {/* Health Score */}
-          <section className="flex flex-col items-center justify-center rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
+          <section className={`flex flex-col items-center justify-center rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur ${severity === "CRITICAL" ? "animate-healthDrop" : ""}`}>
             <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-slate-500">
               System Health
             </p>
             <p className={`font-heading text-6xl font-bold tabular-nums ${healthColor}`}>
-              {healthScore}
+              {displayHealthScore}
             </p>
             <p className="mt-1 text-xs text-slate-500">out of 100</p>
             <div className="mt-3 h-2 w-full rounded-full bg-slate-800">
               <div
                 className={`h-2 rounded-full transition-all duration-700 ${
-                  healthScore >= 70 ? "bg-emerald-500" : healthScore >= 40 ? "bg-amber-500" : "bg-rose-500"
+                  displayHealthScore >= 70 ? "bg-emerald-500" : displayHealthScore >= 40 ? "bg-amber-500" : "bg-rose-500"
                 }`}
-                style={{ width: `${healthScore}%` }}
+                style={{ width: `${displayHealthScore}%` }}
               />
             </div>
           </section>
@@ -351,17 +455,41 @@ export default function Home() {
           ))}
         </div>
 
+        <div className="grid gap-4 sm:grid-cols-3">
+          <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-5 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Efficiency</p>
+            <p className="font-heading mt-1 text-3xl font-bold tabular-nums text-emerald-300">
+              {efficiencyScore}%
+            </p>
+            <p className="text-xs text-slate-500">Energy efficiency estimate</p>
+          </section>
+          <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-5 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500">Estimated Failure Window</p>
+            <p className="font-heading mt-1 text-3xl font-bold tabular-nums text-amber-300">
+              {failureWindow}
+            </p>
+            <p className="text-xs text-slate-500">Predictive downtime estimate</p>
+          </section>
+          <section className="rounded-2xl border border-rose-500/25 bg-rose-950/25 p-5 backdrop-blur">
+            <p className="text-xs font-semibold uppercase tracking-widest text-rose-300">Estimated Cost Impact</p>
+            <p className="font-heading mt-1 text-3xl font-bold tabular-nums text-rose-200">
+              ${costImpactLow}-${costImpactHigh}
+            </p>
+            <p className="text-xs text-rose-200/80">per month in wasted energy if unresolved</p>
+          </section>
+        </div>
+
         {/* ── CHART ─────────────────────────────────────────────────────── */}
-        <Chart data={history} />
+        <Chart data={history} leakEventTime={leakEventTime} isCritical={severity === "CRITICAL"} />
 
         {/* ── AI EXPLANATION ────────────────────────────────────────────── */}
-        {aiExplanation && (
+        {aiDiagnosis && (
           <section className="rounded-2xl border border-violet-500/25 bg-slate-950/80 p-6 backdrop-blur">
             <h2 className="font-heading text-xl tracking-wide text-violet-300">
-              AI Explanation
+              AI Diagnosis
             </h2>
             <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-slate-300">
-              {aiExplanation}
+              {aiDiagnosis}
             </p>
           </section>
         )}

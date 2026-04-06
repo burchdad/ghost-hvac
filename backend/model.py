@@ -119,20 +119,45 @@ def analyze_anomaly(
     else:
         severity = "CRITICAL"
 
-    # ── AI Explanation ────────────────────────────────────────────────────────
+    # ── Business-facing metrics ──────────────────────────────────────────────
+    efficiency_score = max(
+        0,
+        min(
+            100,
+            round(
+                (delta_t / 20.0) * 55
+                + max(0.0, 20.0 - abs(superheat - 10.0)) * 1.2
+                + max(0.0, 16.0 - runtime) * 1.4
+            ),
+        ),
+    )
+
+    inefficiency = max(0, 100 - efficiency_score)
+    cost_impact_low = round(inefficiency * 4)
+    cost_impact_high = round(inefficiency * 9)
+
+    if severity == "CRITICAL" and leak_probability >= 70:
+        failure_window = "24-72 hours"
+    elif severity == "CRITICAL":
+        failure_window = "3-7 days"
+    elif severity == "WARNING":
+        failure_window = "7-14 days"
+    else:
+        failure_window = "30+ days"
+
+    # ── AI Diagnosis ─────────────────────────────────────────────────────────
     if not explanation_lines:
-        ai_explanation = (
-            "All systems nominal. Pressure, superheat, subcooling, and temperature "
-            "differential are within specification."
+        ai_diagnosis = (
+            "Thermodynamic profile is stable. No leak signature detected and "
+            "system efficiency remains within expected operating range."
         )
     else:
-        trigger = (
-            "flagged CRITICAL" if severity == "CRITICAL"
-            else "flagged WARNING" if severity == "WARNING"
-            else "reporting NORMAL"
-        )
-        ai_explanation = f"System {trigger} due to:\n" + "\n".join(
-            f"• {line}" for line in explanation_lines
+        severity_phrase = "critical performance degradation" if severity == "CRITICAL" else "abnormal behavior"
+        ai_diagnosis = (
+            f"Detected {severity_phrase} consistent with refrigerant-side imbalance. "
+            f"Estimated efficiency is {efficiency_score}%. "
+            f"If unresolved, projected waste is ${cost_impact_low}-${cost_impact_high}/month.\n"
+            + "\n".join(f"• {line}" for line in explanation_lines)
         )
 
     return {
@@ -141,5 +166,10 @@ def analyze_anomaly(
         "health_score":     health_score,
         "leak_probability": leak_probability,
         "leak_label":       leak_label,
-        "ai_explanation":   ai_explanation,
+        "efficiency_score": efficiency_score,
+        "cost_impact_low":  cost_impact_low,
+        "cost_impact_high": cost_impact_high,
+        "failure_window":   failure_window,
+        "ai_diagnosis":     ai_diagnosis,
+        "ai_explanation":   ai_diagnosis,
     }
