@@ -75,3 +75,21 @@ If you prefer deploying only the backend folder directly, set Root Directory to 
 
 - Build command: `pip install -r requirements.txt`
 - Start command: `uvicorn main:app --host 0.0.0.0 --port ${PORT}`
+
+## Deploy Frontend To Vercel
+
+Set this environment variable in Vercel:
+
+- `NEXT_PUBLIC_API_URL=https://<your-railway-backend-domain>`
+
+Do not use `http://localhost:8000` in production.
+
+## CORS For Deployed Frontend
+
+Set this environment variable in Railway backend service:
+
+- `CORS_ORIGINS=https://landscape-design-bmcp.vercel.app`
+
+You can provide multiple origins as a comma-separated list:
+
+- `CORS_ORIGINS=https://landscape-design-bmcp.vercel.app,https://<preview-domain>.vercel.app`

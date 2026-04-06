@@ -34,13 +34,29 @@ type ResetResponse = {
   previous_pressure: number;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const POLL_INTERVAL_MS = 2500;
 const MAX_HISTORY_POINTS = 30;
 const MAX_ALERT_LOG = 8;
 
 function formatDisplayTime(timestamp: string): string {
   return new Date(timestamp).toLocaleTimeString();
+}
+
+function resolveApiBaseUrl(): string {
+  if (API_BASE_URL) {
+    return API_BASE_URL;
+  }
+
+  if (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  ) {
+    return "http://localhost:8000";
+  }
+
+  return "";
 }
 
 export default function Home() {
@@ -58,7 +74,14 @@ export default function Home() {
     setErrorMessage(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/simulate?leak=${leak}`, {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        throw new Error(
+          "Missing NEXT_PUBLIC_API_URL. Set it to your backend public URL in Vercel environment variables."
+        );
+      }
+
+      const response = await fetch(`${baseUrl}/simulate?leak=${leak}`, {
         cache: "no-store",
       });
 
@@ -126,7 +149,14 @@ export default function Home() {
       setErrorMessage(null);
 
       try {
-        const response = await fetch(`${API_BASE_URL}/reset`, {
+        const baseUrl = resolveApiBaseUrl();
+        if (!baseUrl) {
+          throw new Error(
+            "Missing NEXT_PUBLIC_API_URL. Set it to your backend public URL in Vercel environment variables."
+          );
+        }
+
+        const response = await fetch(`${baseUrl}/reset`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
