@@ -1,9 +1,9 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && python3 -m pip install --upgrade pip && python3 -m pip install -r backend/requirements.txt"
+buildCommand = "apt-get update && apt-get install -y --no-install-recommends python3 python3-pip python3-venv && python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r backend/requirements.txt"
 
 [deploy]
-startCommand = "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"
+startCommand = ".venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port ${PORT}"
 healthcheckPath = "/simulate"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
