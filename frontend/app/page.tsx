@@ -11,6 +11,7 @@ const Chart = dynamic(() => import("@/components/Chart"), {
 });
 
 type Severity = "NORMAL" | "WARNING" | "CRITICAL";
+type CustomerProfile = "retail" | "industrial";
 
 type SimulationResponse = {
   data: {
@@ -32,6 +33,7 @@ type SimulationResponse = {
     cost_impact_low: number;
     cost_impact_high: number;
     failure_window: string;
+    customer_profile: CustomerProfile;
     ai_diagnosis: string;
     ai_explanation: string;
   };
@@ -105,6 +107,7 @@ export default function Home() {
   const [alertEmail, setAlertEmail] = useState("");
   const [subscribeStatus, setSubscribeStatus] = useState<string | null>(null);
   const [isSubscribing, setIsSubscribing] = useState(false);
+  const [customerProfile, setCustomerProfile] = useState<CustomerProfile>("retail");
   const previousSeverity = useRef<Severity>("NORMAL");
 
   const fetchSimulation = useCallback(async (leak: boolean) => {
@@ -119,9 +122,12 @@ export default function Home() {
         );
       }
 
-      const response = await fetch(`${baseUrl}/simulate?leak=${leak}`, {
+      const response = await fetch(
+        `${baseUrl}/simulate?leak=${leak}&profile=${customerProfile}`,
+        {
         cache: "no-store",
-      });
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`Backend request failed with ${response.status}`);
@@ -153,6 +159,7 @@ export default function Home() {
       setCostImpactLow(payload.analysis.cost_impact_low);
       setCostImpactHigh(payload.analysis.cost_impact_high);
       setFailureWindow(payload.analysis.failure_window);
+      setCustomerProfile(payload.analysis.customer_profile);
       setAiDiagnosis(payload.analysis.ai_diagnosis || payload.analysis.ai_explanation);
       if (!leakEventTime && payload.analysis.severity !== "NORMAL") {
         setLeakEventTime(displayTime);
@@ -182,7 +189,7 @@ export default function Home() {
     } finally {
       setIsLoading(false);
     }
-  }, [leakEventTime]);
+  }, [customerProfile, leakEventTime]);
 
   useEffect(() => {
     fetchSimulation(leakMode);
@@ -476,6 +483,7 @@ export default function Home() {
               ${costImpactLow}-${costImpactHigh}
             </p>
             <p className="text-xs text-rose-200/80">per month in wasted energy if unresolved</p>
+            <p className="mt-1 text-xs text-rose-200/70">Profile: {customerProfile === "industrial" ? "Industrial" : "Retail"}</p>
           </section>
         </div>
 
@@ -500,6 +508,19 @@ export default function Home() {
           <p className="mt-1 text-sm text-slate-400">
             Polling every 2.5 s. Trigger leak mode to stress the thermodynamic model.
           </p>
+          <div className="mt-4 max-w-xs">
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+              Customer Profile
+            </label>
+            <select
+              value={customerProfile}
+              onChange={(e) => setCustomerProfile(e.target.value as CustomerProfile)}
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+            >
+              <option value="retail">Retail HVAC</option>
+              <option value="industrial">Industrial HVAC</option>
+            </select>
+          </div>
           <div className="mt-5 flex flex-wrap gap-3">
             <button
               type="button"

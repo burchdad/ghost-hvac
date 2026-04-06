@@ -57,7 +57,10 @@ def reset_state() -> dict:
 
 
 @app.get("/simulate")
-def simulate(leak: bool = Query(False)) -> dict:
+def simulate(
+    leak: bool = Query(False),
+    profile: str = Query("retail", pattern="^(retail|industrial)$"),
+) -> dict:
     global _previous_pressure, _previous_severity
 
     data = generate_data(leak=leak)
@@ -70,6 +73,7 @@ def simulate(leak: bool = Query(False)) -> dict:
         subcooling=float(data["subcooling"]),
         delta_t=float(data["delta_t"]),
         ambient_temp=float(data["ambient_temp"]),
+        customer_profile=profile,
     )
 
     _previous_pressure = float(data["pressure"])

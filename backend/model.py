@@ -1,6 +1,35 @@
 from __future__ import annotations
 
 
+PROFILE_FACTORS: dict[str, dict[str, float]] = {
+    "retail": {
+        "cost_low_multiplier": 4.5,
+        "cost_high_multiplier": 9.0,
+        "failure_multiplier": 1.0,
+    },
+    "industrial": {
+        "cost_low_multiplier": 11.0,
+        "cost_high_multiplier": 24.0,
+        "failure_multiplier": 0.8,
+    },
+}
+
+
+def _resolve_profile(profile: str) -> str:
+    normalized = profile.strip().lower()
+    return normalized if normalized in PROFILE_FACTORS else "retail"
+
+
+def _format_failure_window(hours_low: int, hours_high: int) -> str:
+    if hours_high <= 72:
+        return f"{hours_low}-{hours_high} hours"
+    days_low = max(1, round(hours_low / 24))
+    days_high = max(days_low, round(hours_high / 24))
+    if days_high >= 30:
+        return "30+ days"
+    return f"{days_low}-{days_high} days"
+
+
 def analyze_anomaly(
     pressure: float,
     prev_pressure: float,
@@ -10,6 +39,7 @@ def analyze_anomaly(
     subcooling: float = 10.0,
     delta_t: float = 20.0,
     ambient_temp: float = 85.0,  # noqa: ARG001 — reserved for dynamic baseline
+    customer_profile: str = "retail",
 ) -> dict:
     """Evaluate HVAC telemetry and produce alerts, health score, leak probability, and AI explanation."""
     alerts: list[str] = []
@@ -132,18 +162,25 @@ def analyze_anomaly(
         ),
     )
 
+    profile = _resolve_profile(customer_profile)
+    profile_factors = PROFILE_FACTORS[profile]
+
     inefficiency = max(0, 100 - efficiency_score)
-    cost_impact_low = round(inefficiency * 4)
-    cost_impact_high = round(inefficiency * 9)
+    cost_impact_low = round(inefficiency * profile_factors["cost_low_multiplier"])
+    cost_impact_high = round(inefficiency * profile_factors["cost_high_multiplier"])
 
     if severity == "CRITICAL" and leak_probability >= 70:
-        failure_window = "24-72 hours"
+        base_hours_low, base_hours_high = 24, 72
     elif severity == "CRITICAL":
-        failure_window = "3-7 days"
+        base_hours_low, base_hours_high = 72, 168
     elif severity == "WARNING":
-        failure_window = "7-14 days"
+        base_hours_low, base_hours_high = 168, 336
     else:
-        failure_window = "30+ days"
+        base_hours_low, base_hours_high = 720, 1440
+
+    failure_hours_low = round(base_hours_low * profile_factors["failure_multiplier"])
+    failure_hours_high = round(base_hours_high * profile_factors["failure_multiplier"])
+    failure_window = _format_failure_window(failure_hours_low, failure_hours_high)
 
     # ── AI Diagnosis ─────────────────────────────────────────────────────────
     if not explanation_lines:
@@ -155,6 +192,7 @@ def analyze_anomaly(
         severity_phrase = "critical performance degradation" if severity == "CRITICAL" else "abnormal behavior"
         ai_diagnosis = (
             f"Detected {severity_phrase} consistent with refrigerant-side imbalance. "
+            f"Profile: {profile.capitalize()} HVAC workload. "
             f"Estimated efficiency is {efficiency_score}%. "
             f"If unresolved, projected waste is ${cost_impact_low}-${cost_impact_high}/month.\n"
             + "\n".join(f"• {line}" for line in explanation_lines)
@@ -170,6 +208,7 @@ def analyze_anomaly(
         "cost_impact_low":  cost_impact_low,
         "cost_impact_high": cost_impact_high,
         "failure_window":   failure_window,
+        "customer_profile": profile,
         "ai_diagnosis":     ai_diagnosis,
         "ai_explanation":   ai_diagnosis,
     }
