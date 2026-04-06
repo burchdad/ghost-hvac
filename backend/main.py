@@ -35,7 +35,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASELINE_RUNTIME = 10.0
+PROFILE_PRESETS: dict[str, dict[str, float]] = {
+    "retail": {
+        "baseline_runtime": 10.0,
+        "ambient_sensitivity": 0.85,
+    },
+    "industrial": {
+        "baseline_runtime": 12.5,
+        "ambient_sensitivity": 1.1,
+    },
+    "enterprise": {
+        "baseline_runtime": 14.0,
+        "ambient_sensitivity": 1.25,
+    },
+}
+
 _previous_pressure = 120.0
 _previous_severity = "NORMAL"
 _subscribers: list[dict] = []
@@ -59,20 +73,23 @@ def reset_state() -> dict:
 @app.get("/simulate")
 def simulate(
     leak: bool = Query(False),
-    profile: str = Query("retail", pattern="^(retail|industrial)$"),
+    profile: str = Query("retail", pattern="^(retail|industrial|enterprise)$"),
 ) -> dict:
     global _previous_pressure, _previous_severity
+
+    profile_preset = PROFILE_PRESETS.get(profile, PROFILE_PRESETS["retail"])
 
     data = generate_data(leak=leak)
     analysis = analyze_anomaly(
         pressure=float(data["pressure"]),
         prev_pressure=_previous_pressure,
         runtime=float(data["runtime"]),
-        baseline_runtime=BASELINE_RUNTIME,
+        baseline_runtime=float(profile_preset["baseline_runtime"]),
         superheat=float(data["superheat"]),
         subcooling=float(data["subcooling"]),
         delta_t=float(data["delta_t"]),
         ambient_temp=float(data["ambient_temp"]),
+        ambient_sensitivity=float(profile_preset["ambient_sensitivity"]),
         customer_profile=profile,
     )
 

@@ -11,7 +11,7 @@ const Chart = dynamic(() => import("@/components/Chart"), {
 });
 
 type Severity = "NORMAL" | "WARNING" | "CRITICAL";
-type CustomerProfile = "retail" | "industrial";
+type CustomerProfile = "retail" | "industrial" | "enterprise";
 
 type SimulationResponse = {
   data: {
@@ -483,7 +483,9 @@ export default function Home() {
               ${costImpactLow}-${costImpactHigh}
             </p>
             <p className="text-xs text-rose-200/80">per month in wasted energy if unresolved</p>
-            <p className="mt-1 text-xs text-rose-200/70">Profile: {customerProfile === "industrial" ? "Industrial" : "Retail"}</p>
+            <p className="mt-1 text-xs text-rose-200/70">
+              Profile: {customerProfile === "enterprise" ? "Multi-site Enterprise" : customerProfile === "industrial" ? "Industrial" : "Retail"}
+            </p>
           </section>
         </div>
 
@@ -519,6 +521,7 @@ export default function Home() {
             >
               <option value="retail">Retail HVAC</option>
               <option value="industrial">Industrial HVAC</option>
+              <option value="enterprise">Multi-site Enterprise</option>
             </select>
           </div>
           <div className="mt-5 flex flex-wrap gap-3">

@@ -12,6 +12,11 @@ PROFILE_FACTORS: dict[str, dict[str, float]] = {
         "cost_high_multiplier": 24.0,
         "failure_multiplier": 0.8,
     },
+    "enterprise": {
+        "cost_low_multiplier": 18.0,
+        "cost_high_multiplier": 38.0,
+        "failure_multiplier": 0.65,
+    },
 }
 
 
@@ -38,7 +43,8 @@ def analyze_anomaly(
     superheat: float = 10.0,
     subcooling: float = 10.0,
     delta_t: float = 20.0,
-    ambient_temp: float = 85.0,  # noqa: ARG001 — reserved for dynamic baseline
+    ambient_temp: float = 85.0,
+    ambient_sensitivity: float = 1.0,
     customer_profile: str = "retail",
 ) -> dict:
     """Evaluate HVAC telemetry and produce alerts, health score, leak probability, and AI explanation."""
@@ -61,7 +67,12 @@ def analyze_anomaly(
         )
 
     # ── Runtime ───────────────────────────────────────────────────────────────
-    runtime_threshold = baseline_runtime * 1.3
+    ambient_delta = max(0.0, ambient_temp - 85.0)
+    runtime_threshold_multiplier = min(
+        1.6,
+        1.3 + (ambient_delta / 120.0) * ambient_sensitivity,
+    )
+    runtime_threshold = baseline_runtime * runtime_threshold_multiplier
     runtime_excess_pct = (
         (runtime - baseline_runtime) / baseline_runtime * 100
         if runtime > baseline_runtime
@@ -150,12 +161,13 @@ def analyze_anomaly(
         severity = "CRITICAL"
 
     # ── Business-facing metrics ──────────────────────────────────────────────
+    ambient_adjusted_delta_t = delta_t + (ambient_delta * 0.12 * ambient_sensitivity)
     efficiency_score = max(
         0,
         min(
             100,
             round(
-                (delta_t / 20.0) * 55
+                (ambient_adjusted_delta_t / 20.0) * 55
                 + max(0.0, 20.0 - abs(superheat - 10.0)) * 1.2
                 + max(0.0, 16.0 - runtime) * 1.4
             ),
@@ -178,8 +190,10 @@ def analyze_anomaly(
     else:
         base_hours_low, base_hours_high = 720, 1440
 
-    failure_hours_low = round(base_hours_low * profile_factors["failure_multiplier"])
-    failure_hours_high = round(base_hours_high * profile_factors["failure_multiplier"])
+    ambient_failure_factor = max(0.75, 1.0 - (ambient_delta / 240.0) * ambient_sensitivity)
+    failure_multiplier = profile_factors["failure_multiplier"] * ambient_failure_factor
+    failure_hours_low = round(base_hours_low * failure_multiplier)
+    failure_hours_high = round(base_hours_high * failure_multiplier)
     failure_window = _format_failure_window(failure_hours_low, failure_hours_high)
 
     # ── AI Diagnosis ─────────────────────────────────────────────────────────
@@ -193,6 +207,7 @@ def analyze_anomaly(
         ai_diagnosis = (
             f"Detected {severity_phrase} consistent with refrigerant-side imbalance. "
             f"Profile: {profile.capitalize()} HVAC workload. "
+            f"Ambient-adjusted risk model: {ambient_temp:.1f}F with sensitivity {ambient_sensitivity:.2f}. "
             f"Estimated efficiency is {efficiency_score}%. "
             f"If unresolved, projected waste is ${cost_impact_low}-${cost_impact_high}/month.\n"
             + "\n".join(f"• {line}" for line in explanation_lines)
