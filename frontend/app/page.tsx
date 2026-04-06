@@ -45,6 +45,10 @@ function formatDisplayTime(timestamp: string): string {
 
 function resolveApiBaseUrl(): string {
   if (API_BASE_URL) {
+    // Ensure an absolute URL — add https:// if the value has no scheme
+    if (!API_BASE_URL.startsWith("http://") && !API_BASE_URL.startsWith("https://")) {
+      return `https://${API_BASE_URL}`;
+    }
     return API_BASE_URL;
   }
 
