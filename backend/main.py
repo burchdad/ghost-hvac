@@ -58,6 +58,8 @@ CLIENTS = [
         "name": "House 1",
         "address": "123 Main St",
         "device_type": "residential",
+        "system_type": "Residential Split",
+        "portfolio_mode": "review",
     },
     {
         "client_id": 2,
@@ -65,6 +67,8 @@ CLIENTS = [
         "name": "House 2",
         "address": "490 Pine Ave",
         "device_type": "residential",
+        "system_type": "Heat Pump Split",
+        "portfolio_mode": "stable",
     },
     {
         "client_id": 3,
@@ -72,6 +76,8 @@ CLIENTS = [
         "name": "Building A",
         "address": "77 Commerce Blvd",
         "device_type": "commercial",
+        "system_type": "RTU (Rooftop Unit)",
+        "portfolio_mode": "urgent",
     },
     {
         "client_id": 4,
@@ -79,6 +85,8 @@ CLIENTS = [
         "name": "Warehouse 9",
         "address": "910 Harbor Way",
         "device_type": "industrial",
+        "system_type": "Multi-zone Packaged",
+        "portfolio_mode": "review",
     },
 ]
 
@@ -86,7 +94,11 @@ _previous_pressure = 120.0
 _previous_severity = "NORMAL"
 _subscribers: list[dict] = []
 _client_states: dict[int, dict[str, float | str]] = {
-    int(client["client_id"]): {"previous_pressure": 120.0, "previous_severity": "NORMAL"}
+    int(client["client_id"]): {
+        "previous_pressure": 120.0,
+        "previous_severity": "NORMAL",
+        "previous_health_score": 100.0,
+    }
     for client in CLIENTS
 }
 
@@ -112,7 +124,11 @@ def _get_client_or_404(company_id: str, client_id: int) -> dict:
 def _simulate_for_client(client_id: int, profile: str, leak: bool) -> dict:
     client_state = _client_states.setdefault(
         client_id,
-        {"previous_pressure": 120.0, "previous_severity": "NORMAL"},
+        {
+            "previous_pressure": 120.0,
+            "previous_severity": "NORMAL",
+            "previous_health_score": 100.0,
+        },
     )
     previous_pressure = float(client_state["previous_pressure"])
     previous_severity = str(client_state["previous_severity"])
@@ -194,27 +210,80 @@ def clients(
     company_id: str = Query(DEFAULT_COMPANY_ID),
     profile: str = Query("retail", pattern="^(retail|industrial|enterprise)$"),
 ) -> list[dict]:
+    priority_rank = {"URGENT": 0, "REVIEW": 1, "STABLE": 2}
+
+    def _priority_for(health_score: int, leak_risk: str) -> str:
+        if health_score < 70 or leak_risk == "HIGH":
+            return "URGENT"
+        if health_score < 85:
+            return "REVIEW"
+        return "STABLE"
+
+    def _ai_insight_for(analysis: dict) -> str:
+        alerts = analysis.get("alerts", [])
+        if not alerts:
+            return "Thermodynamic profile stable"
+        first = str(alerts[0]).lower()
+        if "runtime" in first:
+            return "Short cycling / runtime drift detected"
+        if "superheat" in first:
+            return "Possible refrigerant charge issue"
+        if "delta" in first:
+            return "Cooling efficiency trending down"
+        return "Anomaly detected - review diagnostics"
+
     company_clients = [
         client for client in CLIENTS if str(client["company_id"]) == company_id
     ]
     summary: list[dict] = []
     for client in company_clients:
         client_id = int(client["client_id"])
-        simulated = _simulate_for_client(client_id=client_id, profile=profile, leak=False)
+
+        mode = str(client.get("portfolio_mode", "stable"))
+        leak_mode = mode == "urgent"
+        if mode == "review":
+            # Intermittent anomalies create believable variance without constant criticals.
+            prior = str(_client_states.get(client_id, {}).get("previous_severity", "NORMAL"))
+            leak_mode = prior in {"WARNING", "CRITICAL"}
+
+        simulated = _simulate_for_client(client_id=client_id, profile=profile, leak=leak_mode)
         analysis = simulated["analysis"]
         data = simulated["data"]
+        health_score = int(analysis["health_score"])
+        leak_risk = str(analysis["leak_label"])
+        priority = _priority_for(health_score, leak_risk)
+
+        previous_health = float(_client_states[client_id].get("previous_health_score", health_score))
+        trend = "flat"
+        if health_score > previous_health:
+            trend = "up"
+        elif health_score < previous_health:
+            trend = "down"
+        _client_states[client_id]["previous_health_score"] = float(health_score)
+
+        alert_count = len(analysis.get("alerts", []))
+        runtime = float(data["runtime"])
+
         summary.append(
             {
                 "client_id": client_id,
                 "name": client["name"],
                 "address": client["address"],
                 "device_type": client["device_type"],
+                "system_type": client.get("system_type", client["device_type"]),
                 "status": analysis["severity"],
-                "health_score": analysis["health_score"],
-                "leak_risk": analysis["leak_label"],
+                "priority": priority,
+                "health_score": health_score,
+                "trend": trend,
+                "leak_risk": leak_risk,
+                "alert_count": alert_count,
+                "runtime": runtime,
                 "last_update": data["timestamp"],
+                "ai_insight": _ai_insight_for(analysis),
             }
         )
+
+    summary.sort(key=lambda c: (priority_rank.get(c["priority"], 99), c["health_score"]))
     return summary
 
 
