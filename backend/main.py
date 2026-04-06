@@ -4,12 +4,15 @@ import os
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 try:
     from model import analyze_anomaly
+    from notifier import dispatch_alerts, is_escalation
     from simulator import generate_data
 except ModuleNotFoundError:
     from .model import analyze_anomaly
+    from .notifier import dispatch_alerts, is_escalation
     from .simulator import generate_data
 
 app = FastAPI(title="Ghost HVAC API", version="1.0.0")
@@ -34,11 +37,19 @@ app.add_middleware(
 
 BASELINE_RUNTIME = 10.0
 _previous_pressure = 120.0
+_previous_severity = "NORMAL"
+_subscribers: list[dict] = []
+
+
+class SubscribeRequest(BaseModel):
+    phone: str = ""
+    email: str = ""
 
 
 def reset_state() -> dict:
-    global _previous_pressure
+    global _previous_pressure, _previous_severity
     _previous_pressure = 120.0
+    _previous_severity = "NORMAL"
     return {
         "message": "Backend simulation state reset.",
         "previous_pressure": _previous_pressure,
@@ -47,7 +58,7 @@ def reset_state() -> dict:
 
 @app.get("/simulate")
 def simulate(leak: bool = Query(False)) -> dict:
-    global _previous_pressure
+    global _previous_pressure, _previous_severity
 
     data = generate_data(leak=leak)
     analysis = analyze_anomaly(
@@ -59,10 +70,30 @@ def simulate(leak: bool = Query(False)) -> dict:
 
     _previous_pressure = float(data["pressure"])
 
+    current_severity: str = analysis["severity"]
+    if is_escalation(_previous_severity, current_severity):
+        dispatch_alerts(_subscribers, current_severity, analysis["alerts"])
+    _previous_severity = current_severity
+
     return {
         "data": data,
         "analysis": analysis,
     }
+
+
+@app.post("/subscribe")
+def subscribe(request: SubscribeRequest) -> dict:
+    if not request.phone and not request.email:
+        return {"message": "Provide at least a phone number or email address."}
+
+    entry = {}
+    if request.phone:
+        entry["phone"] = request.phone.strip()
+    if request.email:
+        entry["email"] = request.email.strip()
+
+    _subscribers.append(entry)
+    return {"message": "Subscribed. You'll be notified when your system needs attention."}
 
 
 @app.post("/reset")

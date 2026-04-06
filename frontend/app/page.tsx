@@ -34,6 +34,10 @@ type ResetResponse = {
   previous_pressure: number;
 };
 
+type SubscribeResponse = {
+  message: string;
+};
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const POLL_INTERVAL_MS = 2500;
 const MAX_HISTORY_POINTS = 30;
@@ -72,6 +76,10 @@ export default function Home() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [alertPhone, setAlertPhone] = useState("");
+  const [alertEmail, setAlertEmail] = useState("");
+  const [subscribeStatus, setSubscribeStatus] = useState<string | null>(null);
+  const [isSubscribing, setIsSubscribing] = useState(false);
 
   const fetchSimulation = useCallback(async (leak: boolean) => {
     setIsLoading(true);
@@ -192,6 +200,29 @@ export default function Home() {
     void resetSimulation();
   }, [fetchSimulation]);
 
+  const handleSubscribe = useCallback(async () => {
+    if (!alertPhone && !alertEmail) return;
+    setIsSubscribing(true);
+    setSubscribeStatus(null);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) throw new Error("API URL not configured.");
+      const res = await fetch(`${baseUrl}/subscribe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: alertPhone, email: alertEmail }),
+      });
+      const json = (await res.json()) as SubscribeResponse;
+      setSubscribeStatus(json.message);
+      setAlertPhone("");
+      setAlertEmail("");
+    } catch {
+      setSubscribeStatus("Subscription failed. Please try again.");
+    } finally {
+      setIsSubscribing(false);
+    }
+  }, [alertPhone, alertEmail]);
+
   const modeTag = useMemo(
     () => (leakMode ? "Leak simulation enabled" : "Monitoring nominal conditions"),
     [leakMode]
@@ -205,10 +236,13 @@ export default function Home() {
       <div className="mx-auto max-w-6xl animate-fadeIn space-y-6">
         <header className="rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-6 shadow-[0_0_80px_-25px_rgba(6,182,212,0.4)] backdrop-blur">
           <h1 className="font-heading text-3xl tracking-[0.08em] text-cyan-300 sm:text-4xl">
-            Ghost HVAC Monitor
+            ❄️ Know your HVAC is failing before it actually does.
           </h1>
           <p className="mt-2 text-sm text-slate-300 sm:text-base">
-            AI-powered anomaly detection
+            AI-powered monitoring that detects refrigerant leaks, inefficiencies, and system failures in real time.
+          </p>
+          <p className="mt-3 text-sm font-semibold text-cyan-400">
+            You&apos;ll get a text before your system fails.
           </p>
           <div className="mt-4 inline-flex rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs text-slate-400">
             {modeTag}
@@ -256,6 +290,42 @@ export default function Home() {
         </div>
 
         <Chart data={history} />
+
+        <section className="rounded-2xl border border-cyan-400/20 bg-slate-950/80 p-6 shadow-[0_0_60px_-20px_rgba(6,182,212,0.25)] backdrop-blur">
+          <h2 className="font-heading text-xl tracking-wide text-cyan-300">
+            Get Alerts
+          </h2>
+          <p className="mt-1 text-sm text-slate-400">
+            Enter your phone or email and we&apos;ll blast you an alert the moment we detect a problem.
+          </p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+            <input
+              type="tel"
+              placeholder="Phone number (e.g. +15550001234)"
+              value={alertPhone}
+              onChange={(e) => setAlertPhone(e.target.value)}
+              className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-cyan-500"
+            />
+            <input
+              type="email"
+              placeholder="Email address"
+              value={alertEmail}
+              onChange={(e) => setAlertEmail(e.target.value)}
+              className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-4 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-cyan-500"
+            />
+            <button
+              type="button"
+              disabled={isSubscribing || (!alertPhone && !alertEmail)}
+              onClick={() => void handleSubscribe()}
+              className="rounded-xl border border-cyan-400/45 bg-cyan-500/20 px-5 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-500/30 disabled:opacity-50"
+            >
+              {isSubscribing ? "Subscribing…" : "Notify Me"}
+            </button>
+          </div>
+          {subscribeStatus ? (
+            <p className="mt-3 text-sm text-cyan-300">{subscribeStatus}</p>
+          ) : null}
+        </section>
 
         <section className="rounded-2xl border border-slate-700 bg-slate-950/70 p-6 backdrop-blur">
           <h2 className="font-heading text-xl tracking-wide text-slate-100">
