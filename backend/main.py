@@ -129,7 +129,12 @@ class CreateTicketRequest(BaseModel):
     issue: str = "Automated anomaly review"
     priority: str = "MEDIUM"
     notes: str = ""
-    assigned_to: str = "Mike"
+    assigned_to: str | None = "Mike"
+
+
+class UpdateTicketRequest(BaseModel):
+    assigned_to: str | None = None
+    status: str | None = None
 
 
 def _recommendation_for_behavior(
@@ -171,10 +176,13 @@ def _create_ticket_internal(
     issue: str,
     priority: str,
     notes: str,
-    assigned_to: str,
+    assigned_to: str | None,
     source: str,
 ) -> dict:
     global _next_ticket_id
+    normalized_assignee = (
+        assigned_to.strip() if isinstance(assigned_to, str) and assigned_to.strip() else None
+    )
     ticket = {
         "ticket_id": _next_ticket_id,
         "company_id": company_id,
@@ -183,7 +191,7 @@ def _create_ticket_internal(
         "issue": issue.strip() or "Automated anomaly review",
         "priority": priority.strip().upper() or "MEDIUM",
         "notes": notes.strip(),
-        "assigned_to": assigned_to.strip() or "Mike",
+        "assigned_to": normalized_assignee,
         "source": source,
         "status": "OPEN",
         "created_at": _utc_iso_now(),
@@ -196,7 +204,7 @@ def _create_ticket_internal(
         address=str(client["address"]),
         issue=str(ticket["issue"]),
         priority=str(ticket["priority"]),
-        assigned_to=str(ticket["assigned_to"]),
+        assigned_to=str(ticket["assigned_to"] or "Unassigned"),
     )
 
     return ticket
@@ -602,6 +610,45 @@ def create_ticket(
     return {"message": "Ticket created.", "ticket": ticket}
 
 
+def _get_ticket_or_404(company_id: str, ticket_id: int) -> dict:
+    for ticket in _tickets:
+        if ticket["company_id"] == company_id and int(ticket["ticket_id"]) == ticket_id:
+            return ticket
+    raise HTTPException(
+        status_code=404,
+        detail=f"Ticket {ticket_id} not found for company_id={company_id}",
+    )
+
+
+@app.get("/tickets/{ticket_id}")
+def get_ticket(ticket_id: int, company_id: str = Query(DEFAULT_COMPANY_ID)) -> dict:
+    return _get_ticket_or_404(company_id=company_id, ticket_id=ticket_id)
+
+
+@app.patch("/tickets/{ticket_id}")
+def update_ticket(
+    ticket_id: int,
+    request: UpdateTicketRequest,
+    company_id: str = Query(DEFAULT_COMPANY_ID),
+) -> dict:
+    ticket = _get_ticket_or_404(company_id=company_id, ticket_id=ticket_id)
+
+    if request.status is not None:
+        normalized_status = request.status.strip().upper()
+        if normalized_status not in {"OPEN", "IN_PROGRESS", "RESOLVED"}:
+            raise HTTPException(
+                status_code=400,
+                detail="status must be one of: OPEN, IN_PROGRESS, RESOLVED",
+            )
+        ticket["status"] = normalized_status
+
+    if request.assigned_to is not None:
+        normalized_assignee = request.assigned_to.strip()
+        ticket["assigned_to"] = normalized_assignee if normalized_assignee else None
+
+    return {"message": "Ticket updated.", "ticket": ticket}
+
+
 @app.get("/tickets")
 def list_tickets(
     company_id: str = Query(DEFAULT_COMPANY_ID),
@@ -612,6 +659,18 @@ def list_tickets(
     if role == "tech":
         return [ticket for ticket in scoped if str(ticket.get("assigned_to", "")) == tech_name]
     return scoped
+
+
+@app.get("/technicians")
+def technicians(company_id: str = Query(DEFAULT_COMPANY_ID)) -> list[dict]:
+    known_names = ["Mike", "Sarah"]
+    scoped_assignees = {
+        str(ticket["assigned_to"])
+        for ticket in _tickets
+        if ticket["company_id"] == company_id and ticket.get("assigned_to")
+    }
+    all_names = sorted(set(known_names).union(scoped_assignees))
+    return [{"name": name} for name in all_names]
 
 
 @app.get("/clients/{client_id}/report")

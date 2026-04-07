@@ -13,6 +13,7 @@ type CustomerBehaviorProfile =
 type Priority = "URGENT" | "REVIEW" | "STABLE";
 type Trend = "up" | "down" | "flat";
 type LeakRisk = "LOW" | "MEDIUM" | "HIGH";
+type TicketStatus = "OPEN" | "IN_PROGRESS" | "RESOLVED";
 
 type ClientSummary = {
   client_id: number;
@@ -54,11 +55,25 @@ type CreateTicketResponse = {
     issue: string;
     priority: string;
     notes: string;
-    assigned_to: string;
+    assigned_to: string | null;
     source: string;
-    status: string;
+    status: TicketStatus;
     created_at: string;
   };
+};
+
+type TicketDetailResponse = {
+  ticket_id: number;
+  company_id: string;
+  client_id: number;
+  client_name: string;
+  issue: string;
+  priority: string;
+  notes: string;
+  assigned_to: string | null;
+  source: string;
+  status: TicketStatus;
+  created_at: string;
 };
 
 type TicketItem = {
@@ -69,10 +84,14 @@ type TicketItem = {
   issue: string;
   priority: string;
   notes: string;
-  assigned_to: string;
+  assigned_to: string | null;
   source: string;
-  status: string;
+  status: TicketStatus;
   created_at: string;
+};
+
+type Technician = {
+  name: string;
 };
 
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
@@ -116,6 +135,13 @@ export default function Home() {
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [tickets, setTickets] = useState<TicketItem[]>([]);
   const [ticketsError, setTicketsError] = useState<string | null>(null);
+  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const [selectedTicket, setSelectedTicket] = useState<TicketDetailResponse | null>(null);
+  const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
+  const [ticketModalLoading, setTicketModalLoading] = useState(false);
+  const [ticketSaving, setTicketSaving] = useState(false);
+  const [ticketStatusDraft, setTicketStatusDraft] = useState<TicketStatus>("OPEN");
+  const [ticketAssigneeDraft, setTicketAssigneeDraft] = useState("");
   const [userRole, setUserRole] = useState<"admin" | "tech">("admin");
   const [techName, setTechName] = useState("Mike");
   const [defaultAssignee, setDefaultAssignee] = useState("Mike");
@@ -311,6 +337,16 @@ export default function Home() {
     return "→ Stable";
   };
 
+  const ticketStatusStyle = (status: TicketStatus): string => {
+    if (status === "RESOLVED") {
+      return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
+    }
+    if (status === "IN_PROGRESS") {
+      return "border-amber-500/40 bg-amber-500/15 text-amber-300";
+    }
+    return "border-rose-500/40 bg-rose-500/15 text-rose-300";
+  };
+
   const systemTypes = useMemo(() => {
     const types = Array.from(new Set(clients.map((c) => c.system_type)));
     return types.sort();
@@ -435,6 +471,112 @@ export default function Home() {
       setIsCreatingClient(false);
     }
   }, [loadClients, newClient]);
+
+  const loadTechnicians = useCallback(async () => {
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        return;
+      }
+      const response = await fetch(`${baseUrl}/technicians?company_id=${COMPANY_ID}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as Technician[];
+      setTechnicians(payload);
+    } catch {
+      // Keep UI usable even if technicians endpoint is unavailable.
+    }
+  }, []);
+
+  const openTicket = useCallback(async (ticketId: number) => {
+    setTicketModalLoading(true);
+    setIsTicketModalOpen(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        throw new Error("API URL not configured.");
+      }
+      const response = await fetch(
+        `${baseUrl}/tickets/${ticketId}?company_id=${COMPANY_ID}`,
+        { cache: "no-store" }
+      );
+      if (!response.ok) {
+        throw new Error(`Ticket detail request failed with ${response.status}`);
+      }
+      const payload = (await response.json()) as TicketDetailResponse;
+      setSelectedTicket(payload);
+      setTicketStatusDraft(payload.status);
+      setTicketAssigneeDraft(payload.assigned_to ?? "");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load ticket.";
+      setActionMessage(message);
+      setIsTicketModalOpen(false);
+    } finally {
+      setTicketModalLoading(false);
+    }
+  }, []);
+
+  const saveTicketChanges = useCallback(async () => {
+    if (!selectedTicket) {
+      return;
+    }
+    setTicketSaving(true);
+    try {
+      const baseUrl = resolveApiBaseUrl();
+      if (!baseUrl) {
+        throw new Error("API URL not configured.");
+      }
+      const response = await fetch(
+        `${baseUrl}/tickets/${selectedTicket.ticket_id}?company_id=${COMPANY_ID}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            assigned_to: ticketAssigneeDraft,
+            status: ticketStatusDraft,
+          }),
+        }
+      );
+      if (!response.ok) {
+        throw new Error(`Ticket update failed with ${response.status}`);
+      }
+
+      const payload = (await response.json()) as {
+        message: string;
+        ticket: TicketDetailResponse;
+      };
+
+      setSelectedTicket(payload.ticket);
+      setTickets((previous) =>
+        previous.map((ticket) =>
+          ticket.ticket_id === payload.ticket.ticket_id
+            ? {
+                ...ticket,
+                status: payload.ticket.status,
+                assigned_to: payload.ticket.assigned_to,
+              }
+            : ticket
+        )
+      );
+      setActionMessage(`Ticket #${payload.ticket.ticket_id} updated.`);
+      setIsTicketModalOpen(false);
+      await loadTickets();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to update ticket.";
+      setActionMessage(message);
+    } finally {
+      setTicketSaving(false);
+    }
+  }, [loadTickets, selectedTicket, ticketAssigneeDraft, ticketStatusDraft]);
+
+  useEffect(() => {
+    void loadTechnicians();
+  }, [loadTechnicians]);
 
   return (
     <main className="relative min-h-screen overflow-hidden px-4 pb-12 pt-10 sm:px-8 lg:px-12">
@@ -679,7 +821,7 @@ export default function Home() {
           ) : null}
 
           <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
-            <div className="overflow-x-auto">
+            <div className="min-w-0 overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-800 text-left text-sm">
                 <thead className="text-xs uppercase tracking-wider text-slate-500">
                   <tr>
@@ -790,7 +932,7 @@ export default function Home() {
               </table>
             </div>
 
-            <aside className="h-fit rounded-xl border border-slate-800 bg-slate-900/60 p-4 xl:sticky xl:top-6">
+            <aside className="relative z-10 h-fit rounded-xl border border-slate-800 bg-slate-900/60 p-4 xl:sticky xl:top-6">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="font-heading text-sm uppercase tracking-widest text-cyan-300">
                   Open Tickets
@@ -811,7 +953,11 @@ export default function Home() {
               ) : (
                 <ul className="space-y-2">
                   {tickets.slice(0, 12).map((ticket) => (
-                    <li key={ticket.ticket_id} className="rounded-lg border border-slate-800 bg-slate-950/80 p-2">
+                    <li
+                      key={ticket.ticket_id}
+                      className="cursor-pointer rounded-lg border border-slate-800 bg-slate-950/80 p-2 transition hover:border-cyan-500/40"
+                      onClick={() => void openTicket(ticket.ticket_id)}
+                    >
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <p className="text-xs font-semibold text-slate-100">#{ticket.ticket_id} {ticket.client_name}</p>
                         <span className="rounded-full border border-rose-500/30 bg-rose-500/10 px-2 py-0.5 text-[10px] font-semibold text-rose-300">
@@ -819,7 +965,14 @@ export default function Home() {
                         </span>
                       </div>
                       <p className="text-xs text-slate-300">{ticket.issue}</p>
-                      <p className="text-[11px] text-slate-400">Assigned: {ticket.assigned_to}</p>
+                      <p className="text-[11px] text-slate-400">
+                        Assigned: {ticket.assigned_to ?? "🔧 Unassigned"}
+                      </p>
+                      <p>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${ticketStatusStyle(ticket.status)}`}>
+                          {ticket.status}
+                        </span>
+                      </p>
                       <p className="text-[11px] text-slate-500">Source: {ticket.source}</p>
                       <p className="mt-1 text-[11px] text-slate-500">
                         Created: {formatUpdatedTime(ticket.created_at)}
@@ -836,6 +989,78 @@ export default function Home() {
           </p>
         </section>
       </div>
+
+      {isTicketModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-950 p-5 shadow-2xl">
+            {ticketModalLoading || !selectedTicket ? (
+              <p className="text-sm text-slate-300">Loading ticket details...</p>
+            ) : (
+              <>
+                <h3 className="font-heading text-lg tracking-wide text-cyan-300">
+                  Ticket #{selectedTicket.ticket_id}
+                </h3>
+                <p className="mt-1 text-sm text-slate-300">{selectedTicket.client_name}</p>
+                <p className="mt-3 text-sm text-slate-400">Issue</p>
+                <p className="text-sm text-slate-100">{selectedTicket.issue}</p>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+                      Status
+                    </label>
+                    <select
+                      value={ticketStatusDraft}
+                      onChange={(e) => setTicketStatusDraft(e.target.value as TicketStatus)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+                    >
+                      <option value="OPEN">OPEN</option>
+                      <option value="IN_PROGRESS">IN_PROGRESS</option>
+                      <option value="RESOLVED">RESOLVED</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-widest text-slate-500">
+                      Assign To
+                    </label>
+                    <select
+                      value={ticketAssigneeDraft}
+                      onChange={(e) => setTicketAssigneeDraft(e.target.value)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+                    >
+                      <option value="">Unassigned</option>
+                      {technicians.map((tech) => (
+                        <option key={tech.name} value={tech.name}>
+                          {tech.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-900"
+                    onClick={() => setIsTicketModalOpen(false)}
+                    disabled={ticketSaving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-cyan-500/45 bg-cyan-500/20 px-3 py-2 text-sm font-semibold text-cyan-100 hover:bg-cyan-500/30 disabled:opacity-60"
+                    onClick={() => void saveTicketChanges()}
+                    disabled={ticketSaving}
+                  >
+                    {ticketSaving ? "Saving..." : "Save Changes"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

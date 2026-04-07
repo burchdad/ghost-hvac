@@ -131,6 +131,45 @@ def test_create_ticket_and_list_tickets() -> None:
     assert all(ticket["assigned_to"] == "Mike" for ticket in tech_tickets)
 
 
+def test_get_and_update_ticket() -> None:
+    create_response = client.post(
+        "/clients/1/tickets?company_id=ghost-hvac-co",
+        json={
+            "issue": "Manual dispatch",
+            "priority": "MEDIUM",
+            "notes": "Needs assignment",
+            "assigned_to": "",
+        },
+    )
+    assert create_response.status_code == 200
+    ticket_id = int(create_response.json()["ticket"]["ticket_id"])
+
+    get_response = client.get(f"/tickets/{ticket_id}?company_id=ghost-hvac-co")
+    assert get_response.status_code == 200
+    ticket = get_response.json()
+    assert ticket["ticket_id"] == ticket_id
+    assert ticket["assigned_to"] is None
+    assert ticket["status"] == "OPEN"
+
+    patch_response = client.patch(
+        f"/tickets/{ticket_id}?company_id=ghost-hvac-co",
+        json={"assigned_to": "Sarah", "status": "IN_PROGRESS"},
+    )
+    assert patch_response.status_code == 200
+    updated = patch_response.json()["ticket"]
+    assert updated["assigned_to"] == "Sarah"
+    assert updated["status"] == "IN_PROGRESS"
+
+
+def test_technicians_endpoint() -> None:
+    response = client.get("/technicians?company_id=ghost-hvac-co")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, list)
+    assert any(item["name"] == "Mike" for item in payload)
+    assert any(item["name"] == "Sarah" for item in payload)
+
+
 def test_report_exports_csv_and_pdf() -> None:
     csv_response = client.get(
         "/clients/1/report?company_id=ghost-hvac-co&profile=retail&format=csv"
